@@ -1,6 +1,8 @@
 import os
 from dataclasses import dataclass
+from dotenv import load_dotenv
 
+load_dotenv()
 
 def get_env(key: str, default=None, required: bool = False):
     value = os.getenv(key, default)

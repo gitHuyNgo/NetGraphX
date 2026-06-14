@@ -2,4 +2,12 @@
 .env
 
 # virtual environment
-.venv
+.venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# PyVis generated assets
+lib/
+libs/
