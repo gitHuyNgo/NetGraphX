@@ -2,3 +2,4 @@ pynetbox
 networkx 
 pyvis
 dotenv
+neo4j
