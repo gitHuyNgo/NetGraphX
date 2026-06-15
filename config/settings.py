@@ -25,5 +25,14 @@ class AppConfig:
     DEBUG: bool = get_env("DEBUG", "true").lower() == "true"
 
 
+@dataclass(frozen=True)
+class Neo4jConfig:
+    NEO4J_URI: str = get_env("NEO4J_URI", "bolt://localhost:7687")
+    NEO4J_USER: str = get_env("NEO4J_USER", "neo4j")
+    NEO4J_PASSWORD: str = get_env("NEO4J_PASSWORD", "")
+    NEO4J_ENABLED: bool = get_env("NEO4J_ENABLED", "false").lower() == "true"
+
+
 netbox_config = NetBoxConfig()
+neo4j_config = Neo4jConfig()
 app_config = AppConfig()
