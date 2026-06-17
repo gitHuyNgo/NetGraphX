@@ -1,0 +1,101 @@
+{
+  "global": {
+    "config_version": "1.0",
+    "default_compliance_status": "compliant",
+    "compliance_status_priority": [
+      "non_compliant_spof",
+      "non_compliant_loop",
+      "non_compliant_vlan",
+      "non_compliant_star"
+    ],
+    "merged_compliance": {
+      "pass_knowledge_template": "Device {device_name} satisfies all configured network audit rules: loop detection, single point of failure analysis, VLAN consistency validation, and star topology verification.",
+      "global_pass_summary": "All configured network audit rules passed. The topology is compliant with loop, resilience, VLAN, and star topology requirements.",
+      "global_fail_summary": "One or more network audit rules reported violations. Review node-level compliance_status and audit_knowledge properties for remediation guidance."
+    }
+  },
+  "network_loop": {
+    "rule_id": "network_loop",
+    "rule_name": "Layer-Two Loop Detection",
+    "compliance_status": {
+      "pass": "compliant",
+      "fail": "non_compliant_loop"
+    },
+    "global_summary": {
+      "pass": "Layer-two loop detection passed. No circular physical paths were identified in the topology graph.",
+      "fail": "Layer-two loop detection failed. One or more circular paths exist and may cause broadcast storms or MAC table instability."
+    },
+    "node_knowledge_template": {
+      "pass": "Device {device_name} is not participating in any detected layer-two loop. All adjacent links form an acyclic spanning structure at this node.",
+      "fail": "Device {device_name} participates in a layer-two loop. Circular path: {cycle_path}. All devices in the cycle: {cycle_devices}."
+    },
+    "metrics": {
+      "cycle_orientation": "ignore"
+    }
+  },
+  "single_point_of_failure": {
+    "rule_id": "single_point_of_failure",
+    "rule_name": "Single Point of Failure Detection",
+    "compliance_status": {
+      "pass": "compliant",
+      "fail": "non_compliant_spof"
+    },
+    "global_summary": {
+      "pass": "Single point of failure analysis passed. No articulation points were identified that would partition the network upon device failure.",
+      "fail": "Single point of failure analysis failed. One or more devices are articulation points whose failure would isolate network segments."
+    },
+    "node_knowledge_template": {
+      "pass": "Device {device_name} is not a single point of failure. Removing this device would not partition the remaining topology graph.",
+      "fail": "Device {device_name} is a single point of failure (articulation point). Failure or maintenance on this device will isolate connected network segments. Adjacent devices: {adjacent_devices}."
+    },
+    "metrics": {
+      "analysis_method": "articulation_points"
+    }
+  },
+  "vlan_mismatch": {
+    "rule_id": "vlan_mismatch",
+    "rule_name": "Cross-Port VLAN Consistency Validation",
+    "compliance_status": {
+      "pass": "compliant",
+      "fail": "non_compliant_vlan"
+    },
+    "global_summary": {
+      "pass": "VLAN consistency validation passed. All cabled port pairs report matching VLAN identifiers on both ends.",
+      "fail": "VLAN consistency validation failed. One or more cabled port pairs terminate on ports assigned to different VLAN identifiers."
+    },
+    "node_knowledge_template": {
+      "pass": "Device {device_name} has no detected VLAN mismatches on any cabled interface participating in the topology graph.",
+      "fail": "Device {device_name} has a VLAN mismatch on cabled interface {local_interface} connected to {peer_device} interface {peer_interface}. Local VLAN ID: {local_vlan_id}. Peer VLAN ID: {peer_vlan_id}. Cable ID: {cable_id}."
+    },
+    "metrics": {
+      "require_both_vlan_values": true
+    },
+    "link_knowledge_template": "Physical link between {source_device} and {target_device} has mismatched VLAN assignments. {source_device} interface {source_interface} uses VLAN {source_vlan_id} while {target_device} interface {target_interface} uses VLAN {target_vlan_id}."
+  },
+  "star_topology": {
+    "rule_id": "star_topology",
+    "rule_name": "Strict Star Topology Validation",
+    "compliance_status": {
+      "pass": "compliant",
+      "fail": "non_compliant_star"
+    },
+    "global_summary": {
+      "pass": "Star topology validation passed. The graph contains exactly one central hub with degree N-1 and all peripheral nodes have degree 1.",
+      "fail": "Star topology validation failed. The graph does not conform to strict star specifications."
+    },
+    "node_knowledge_template": {
+      "pass": "Device {device_name} conforms to strict star topology requirements. Node degree: {node_degree}. Expected role: {expected_role}.",
+      "hub_missing": "Device {device_name} cannot conform to star topology because no valid central hub exists. Node degree: {node_degree}. A star requires exactly one hub with degree {required_hub_degree}.",
+      "hub_invalid": "Device {device_name} is designated as the central hub but its degree is {node_degree}. A valid hub must have degree {required_hub_degree} (N-1) for a graph with {node_count} devices.",
+      "multiple_hubs": "Device {device_name} qualifies as a central hub candidate but multiple hub candidates were detected: {hub_candidates}. A strict star allows exactly one hub.",
+      "peripheral_invalid": "Device {device_name} is a peripheral node but its degree is {node_degree}. Peripheral nodes in a strict star must have degree exactly {required_peripheral_degree}. Additional links indicate illegal cross-connections or mesh paths.",
+      "peripheral_pass": "Device {device_name} is a valid peripheral node in the star topology with degree {node_degree}, connected only to the central hub {hub_device}."
+    },
+    "metrics": {
+      "required_peripheral_degree": 1,
+      "hub_degree_formula": "node_count_minus_one",
+      "expected_hub_role_label": "hub",
+      "expected_peripheral_role_label": "peripheral"
+    }
+  }
+}

@@ -1,43 +1,63 @@
 import pynetbox
-from typing import List, Dict, Any
+from typing import Any, Dict, List, Optional
+
 from config.settings import netbox_config
+
+
+def _vlan_record(vlan_obj: Any) -> Optional[Dict[str, Any]]:
+    if not vlan_obj:
+        return None
+    return {"vid": vlan_obj.vid, "name": vlan_obj.name}
 
 
 class NetBoxClient:
     def __init__(self):
         self.nb = pynetbox.api(
             netbox_config.NETBOX_URL,
-            token=netbox_config.NETBOX_API_TOKEN
+            token=netbox_config.NETBOX_API_TOKEN,
         )
-    
+
     def fetch_all_devices(self) -> List[Dict[str, Any]]:
         try:
             devices = self.nb.dcim.devices.all()
             cleaned_devices = []
-            
+
             for device in devices:
                 role_obj = getattr(device, "role", None)
-                role_name = role_obj.name if role_obj else "Unknown"
-                
+                role_name = role_obj.name if role_obj else None
+
                 type_obj = getattr(device, "device_type", None)
                 manufacturer_obj = getattr(type_obj, "manufacturer", None) if type_obj else None
-                manufacturer_name = manufacturer_obj.name if manufacturer_obj else "Unknown"
-                
-                ip_obj = getattr(device, "primary_ip", None)
-                primary_ip = ip_obj.address if ip_obj else "None"
+                vendor_name = manufacturer_obj.name if manufacturer_obj else None
+                model_name = type_obj.model if type_obj else None
 
-                cleaned_devices.append({
-                    "id": device.id,
-                    "name": device.name,
-                    "role": role_name,
-                    "manufacturer": manufacturer_name,
-                    "primary_ip": primary_ip,
-                    "status": device.status.value if device.status else "Unknown"
-                })
+                site_obj = getattr(device, "site", None)
+                site_name = site_obj.name if site_obj else None
+
+                rack_obj = getattr(device, "rack", None)
+                rack_name = rack_obj.name if rack_obj else None
+
+                ip_obj = getattr(device, "primary_ip", None)
+                primary_ip = ip_obj.address if ip_obj else None
+
+                cleaned_devices.append(
+                    {
+                        "id": device.id,
+                        "name": device.name,
+                        "model": model_name,
+                        "vendor": vendor_name,
+                        "role": role_name,
+                        "site": site_name,
+                        "rack": rack_name,
+                        "manufacturer": vendor_name,
+                        "primary_ip": primary_ip,
+                        "status": device.status.value if device.status else None,
+                    }
+                )
             return cleaned_devices
-            
-        except Exception as e:
-            print(f"[Error] Get error when getting device list:: {str(e)}")
+
+        except Exception as exc:
+            print(f"[Error] Get error when getting device list:: {exc}")
             return []
 
     def fetch_all_cables(self) -> List[Dict[str, Any]]:
@@ -52,18 +72,24 @@ class NetBoxClient:
 
                     a_device = a_term.object.device.name
                     a_interface = a_term.object.name
+                    a_interface_id = a_term.object.id
 
                     b_device = b_term.object.device.name
                     b_interface = b_term.object.name
+                    b_interface_id = b_term.object.id
 
-                    cleaned_cables.append({
-                        "cable_id": cable.id,
-                        "source_device": a_device,
-                        "source_interface": a_interface,
-                        "target_device": b_device,
-                        "target_interface": b_interface,
-                        "status": cable.status.value if cable.status else "Unknown"
-                    })
+                    cleaned_cables.append(
+                        {
+                            "cable_id": cable.id,
+                            "source_device": a_device,
+                            "source_interface": a_interface,
+                            "source_interface_id": a_interface_id,
+                            "target_device": b_device,
+                            "target_interface": b_interface,
+                            "target_interface_id": b_interface_id,
+                            "status": cable.status.value if cable.status else None,
+                        }
+                    )
 
                 except StopIteration:
                     continue
@@ -72,36 +98,52 @@ class NetBoxClient:
 
             return cleaned_cables
 
-        except Exception as e:
-            print(f"[Error] Get error when getting cable list: {str(e)}")
+        except Exception as exc:
+            print(f"[Error] Get error when getting cable list: {exc}")
             return []
-    
+
     def fetch_all_interfaces_vlan(self) -> List[Dict[str, Any]]:
         try:
             interfaces = self.nb.dcim.interfaces.all()
             cleaned_interfaces = []
 
             for interface in interfaces:
-                vlan_id = None
-                if interface.untagged_vlan:
-                    vlan_id = interface.untagged_vlan.vid
-                elif interface.tagged_vlans:
-                    first_vlan = next(iter(interface.tagged_vlans), None)
-                    vlan_id = first_vlan.vid if first_vlan else None
+                mode_value = interface.mode.value if interface.mode else None
+                untagged_vlan = _vlan_record(getattr(interface, "untagged_vlan", None))
+                tagged_vlans = [
+                    record
+                    for vlan in getattr(interface, "tagged_vlans", []) or []
+                    if (record := _vlan_record(vlan))
+                ]
 
-                cleaned_interfaces.append({
-                    "device_name": interface.device.name if interface.device else "Unknown",
-                    "interface_name": interface.name,
-                    "mode": interface.mode.value if interface.mode else "None",
-                    "vlan_id": vlan_id
-                })
+                vlan_id = None
+                if untagged_vlan:
+                    vlan_id = untagged_vlan["vid"]
+                elif tagged_vlans:
+                    vlan_id = tagged_vlans[0]["vid"]
+
+                cleaned_interfaces.append(
+                    {
+                        "id": interface.id,
+                        "name": interface.name,
+                        "mac_address": interface.mac_address or None,
+                        "mode": mode_value,
+                        "device_id": interface.device.id if interface.device else None,
+                        "device_name": interface.device.name if interface.device else None,
+                        "interface_name": interface.name,
+                        "untagged_vlan": untagged_vlan,
+                        "tagged_vlans": tagged_vlans,
+                        "vlan_id": vlan_id,
+                    }
+                )
             return cleaned_interfaces
 
-        except Exception as e:
-            print(f"[Error] Get error when getting interface list: {str(e)}")
+        except Exception as exc:
+            print(f"[Error] Get error when getting interface list: {exc}")
             return []
-        
-if __name__ == '__main__':
+
+
+if __name__ == "__main__":
     client = NetBoxClient()
 
     print("\n[1] Extracting Devices list...")

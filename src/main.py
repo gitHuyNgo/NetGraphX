@@ -2,26 +2,36 @@ from config.settings import neo4j_config
 from src.data.netbox_client import NetBoxClient
 from src.engine.graph_builder import NetworkGraphBuilder
 from src.engine.rule_audit import (
+    DEFAULT_AUDIT_CONFIG_PATH,
     detect_network_loops,
     detect_single_points_of_failure,
     detect_vlan_mismatch,
-    findings_error_nodes,
-    findings_vlan_mismatch_details,
-    run_all_analytics,
+    run_all_compliance_audits,
+    spof_devices,
+    verify_star_topology,
+    vlan_mismatch_visualization_details,
 )
 from src.models.topology import TopologyData
 from src.persistence.neo4j_store import Neo4jTopologyStore
 
 
-def _print_findings(findings, success_message: str) -> None:
-    if findings:
-        for finding in findings:
-            print(f"    {finding.severity}: {finding.description}")
-    else:
-        print(f"    SUCCESS: {success_message}")
+def _print_audit_result(rule_name: str, result: dict) -> None:
+    print(f" -> {rule_name}")
+    print(f"    Status: {'PASSED' if result['is_passed'] else 'FAILED'}")
+    print(f"    Summary: {result['global_compliance_summary']}")
+
+    if not result["is_passed"]:
+        for device_name, node_data in result["node_compliance_data"].items():
+            if node_data["compliance_status"] != "compliant":
+                print(
+                    f"    Device {device_name} "
+                    f"[{node_data['compliance_status']}]: {node_data['audit_knowledge']}"
+                )
 
 
 def main():
+    audit_config_path = str(DEFAULT_AUDIT_CONFIG_PATH)
+
     print("==================================================")
     print("   RUNNING NETGRAPHX ENGINE - VIETTEL LABS        ")
     print("==================================================\n")
@@ -53,48 +63,62 @@ def main():
     builder = NetworkGraphBuilder()
     builder.build_topology(topology.devices, topology.cables)
 
-    print("\n[Step 3] Running compliance checking rules...")
-    print(" -> Executing Network Loop Analysis...")
-    loop_findings = detect_network_loops(builder.G)
-    _print_findings(loop_findings, "The network is secure, with no circuit loops.")
+    print("\n[Step 3] Running compliance audit engine...")
+    print(f"    Configuration: {audit_config_path}")
 
-    print(" -> Executing Single Point of Failure Scan...")
-    spof_findings = detect_single_points_of_failure(builder.G)
-    _print_findings(
-        spof_findings,
-        "The network system meets standards and has no SPOF nodes",
+    loop_result = detect_network_loops(builder.G, audit_config_path)
+    _print_audit_result("Network Loop Detection", loop_result)
+
+    spof_result = detect_single_points_of_failure(builder.G, audit_config_path)
+    _print_audit_result("Single Point of Failure Analysis", spof_result)
+
+    vlan_result = detect_vlan_mismatch(
+        builder.G,
+        topology.interfaces,
+        audit_config_path,
     )
+    _print_audit_result("VLAN Consistency Validation", vlan_result)
 
-    print(" -> Executing Cross-Port VLAN Match Verification...")
-    vlan_findings = detect_vlan_mismatch(builder.G, topology.interfaces)
-    if vlan_findings:
-        print("    CRITICAL: Out of sync parameters found on links:")
-        for item in findings_vlan_mismatch_details(vlan_findings):
-            print(f"       ↳ Link {item['connection']}: {item['detail']}")
-    else:
-        print("    SUCCESS: VLAN configuration is synchronized across all cable routes.")
+    star_result = verify_star_topology(builder.G, audit_config_path)
+    _print_audit_result("Star Topology Validation", star_result)
 
-    findings = run_all_analytics(builder.G, topology.interfaces)
+    compliance = run_all_compliance_audits(
+        builder.G,
+        topology.interfaces,
+        audit_config_path,
+    )
+    print("\n[Step 3 Summary] Merged compliance result")
+    print(f"    Status: {'PASSED' if compliance['is_passed'] else 'FAILED'}")
+    print(f"    Summary: {compliance['global_compliance_summary']}")
 
     if neo4j_store:
-        print("\n[Step 3b] Applying analytics flags to Neo4j nodes...")
+        print("\n[Step 3b] Applying audit flags to Neo4j graph model...")
         try:
-            neo4j_store.apply_findings(findings)
-            print(f"[Neo4j] Applied flags from {len(findings)} finding(s).")
+            neo4j_store.apply_compliance(
+                builder.G,
+                topology.interfaces,
+                loop_result,
+                spof_result,
+                star_result,
+                audit_config_path,
+            )
+            print("[Neo4j] Device, interface, and link audit flags updated successfully.")
         except Exception as exc:
-            print(f"[Neo4j] Finding flag sync failed: {exc}")
+            print(f"[Neo4j] Compliance sync failed: {exc}")
 
     if neo4j_store:
         neo4j_store.close()
 
     print("\n[Step 4] Synchronizing metadata to Pyvis UI element layer...")
-    spof_nodes = findings_error_nodes(spof_findings)
-    mismatch_details = findings_vlan_mismatch_details(vlan_findings) or None
+    mismatch_details = vlan_mismatch_visualization_details(
+        builder.G,
+        topology.interfaces,
+    ) or None
 
     builder.generate_html_visualization(
         filename="topology.html",
         mismatch_list=mismatch_details,
-        bottlenecks_list=spof_nodes,
+        bottlenecks_list=spof_devices(compliance),
     )
 
     print("\n==================================================")
