@@ -33,6 +33,13 @@ class Neo4jConfig:
     NEO4J_ENABLED: bool = get_env("NEO4J_ENABLED", "false").lower() == "true"
 
 
+@dataclass(frozen=True)
+class LLMConfig:
+    OPENAI_API_KEY: str = get_env("OPENAI_API_KEY", "")
+    OPENAI_MODEL: str = get_env("OPENAI_MODEL", "gpt-4o-mini")
+
+
 netbox_config = NetBoxConfig()
 neo4j_config = Neo4jConfig()
 app_config = AppConfig()
+llm_config = LLMConfig()

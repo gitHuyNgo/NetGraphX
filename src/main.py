@@ -1,3 +1,5 @@
+import sys
+
 from config.settings import neo4j_config
 from src.data.netbox_client import NetBoxClient
 from src.engine.graph_builder import NetworkGraphBuilder
@@ -31,6 +33,7 @@ def _print_audit_result(rule_name: str, result: dict) -> None:
 
 def main():
     audit_config_path = str(DEFAULT_AUDIT_CONFIG_PATH)
+    skip_embed = "--skip-embed" in sys.argv
 
     print("==================================================")
     print("   RUNNING NETGRAPHX ENGINE - VIETTEL LABS        ")
@@ -105,6 +108,13 @@ def main():
             print("[Neo4j] Device, interface, and link audit flags updated successfully.")
         except Exception as exc:
             print(f"[Neo4j] Compliance sync failed: {exc}")
+
+    if neo4j_store and not skip_embed:
+        print("\n[Step 3c] Building vector embeddings for RAG pipeline (Task 2)...")
+        print("    Tip: Run with --skip-embed to skip this step for faster iterations.")
+        neo4j_store.build_vector_index()
+    elif skip_embed:
+        print("\n[Step 3c] Skipping vector embedding (--skip-embed flag set).")
 
     if neo4j_store:
         neo4j_store.close()
