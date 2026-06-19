@@ -3,3 +3,7 @@ networkx
 pyvis
 dotenv
 neo4j
+sentence-transformers
+openai
+python-dotenv
+streamlit
