@@ -2,7 +2,7 @@ import os
 from dataclasses import dataclass
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)
 
 def get_env(key: str, default=None, required: bool = False):
     value = os.getenv(key, default)
@@ -39,7 +39,28 @@ class LLMConfig:
     OPENAI_MODEL: str = get_env("OPENAI_MODEL", "gpt-4o-mini")
 
 
+@dataclass(frozen=True)
+class WebhookConfig:
+    """Configuration for the debounced NetBox webhook receiver."""
+    WEBHOOK_SECRET: str = get_env("WEBHOOK_SECRET", "")
+    WEBHOOK_PORT: int = int(get_env("WEBHOOK_PORT", "5001"))
+    # Minutes to wait since last NetBox change before triggering auto-sync.
+    # Override in .env; do NOT hardcode this value.
+    WEBHOOK_DEBOUNCE_MINUTES: int = int(get_env("WEBHOOK_DEBOUNCE_MINUTES", "10"))
+    WEBHOOK_STATE_FILE: str = get_env("WEBHOOK_STATE_FILE", "webhook_state.json")
+
+
+@dataclass(frozen=True)
+class AuthConfig:
+    """Configuration for role-based access control."""
+    USERS_FILE: str = get_env("USERS_FILE", "config/users.yaml")
+    # Secret key used to sign session tokens / Streamlit session integrity
+    SESSION_SECRET: str = get_env("SESSION_SECRET", "changeme-set-in-dotenv")
+
+
 netbox_config = NetBoxConfig()
 neo4j_config = Neo4jConfig()
 app_config = AppConfig()
-llm_config = LLMConfig()
+llm_config = LLMConfig()
+webhook_config = WebhookConfig()
+auth_config = AuthConfig()

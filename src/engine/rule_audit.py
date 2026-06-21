@@ -339,95 +339,126 @@ def verify_star_topology(
     audit_config = load_audit_config(config_path)
     rule_config = audit_config["star_topology"]
     metrics = rule_config["metrics"]
-    node_count = G.number_of_nodes()
-    required_peripheral_degree = metrics["required_peripheral_degree"]
-    required_hub_degree = max(node_count - 1, 0)
+    allowed_roles = metrics.get("allowed_roles", ["core_switch", "distribution_switch", "access_switch", "endpoint"])
+    
     node_compliance_data: Dict[str, NodeComplianceData] = {}
+    
+    core_switches = []
+    for n, d in G.nodes(data=True):
+        raw_r = d.get("role")
+        r = raw_r.lower().replace(" ", "_").replace("-", "_") if raw_r else ""
+        if r == "core_switch":
+            core_switches.append(n)
+    
+    for device_name, data in G.nodes(data=True):
+        role_raw = data.get("role")
+        role = role_raw.lower().replace(" ", "_").replace("-", "_") if role_raw else ""
+        reasons = []
+        
+        # 8. Unknown/unsupported role
+        if role not in allowed_roles:
+            reasons.append(f"Vai trò thiết bị không hợp lệ hoặc không được hỗ trợ: {role_raw}")
+        
+        expected_parent_role = None
+        if role == "distribution_switch":
+            expected_parent_role = "core_switch"
+        elif role == "access_switch":
+            expected_parent_role = "distribution_switch"
+        elif role == "endpoint":
+            expected_parent_role = "access_switch"
+            
+        upstream_parents = []
+        
+        # Check connections
+        for neighbor in G.neighbors(device_name):
+            neighbor_role_raw = G.nodes[neighbor].get("role")
+            neighbor_role = neighbor_role_raw.lower().replace(" ", "_").replace("-", "_") if neighbor_role_raw else ""
+            edge_data = G.edges[device_name, neighbor]
+            
+            # Check 1, 3, 4: Adjacency rules
+            if role == "core_switch":
+                if neighbor_role not in ["distribution_switch", "core_switch"]:
+                    reasons.append(f"Kết nối không hợp lệ tới lớp {neighbor_role}: {neighbor}")
+            elif role == "distribution_switch":
+                if neighbor_role == "core_switch":
+                    upstream_parents.append(neighbor)
+                elif neighbor_role == "access_switch":
+                    pass
+                elif neighbor_role == "distribution_switch":
+                    status = edge_data.get("status", "").lower()
+                    if status not in ["redundancy", "redundant"]:
+                        reasons.append(f"Kết nối ngang hàng giữa các distribution_switch không được đánh dấu là redundancy: tới {neighbor}")
+                else:
+                    reasons.append(f"Kết nối không hợp lệ tới lớp {neighbor_role}: {neighbor}")
+            elif role == "access_switch":
+                if neighbor_role == "distribution_switch":
+                    upstream_parents.append(neighbor)
+                elif neighbor_role == "endpoint":
+                    pass
+                elif neighbor_role == "access_switch":
+                    reasons.append(f"Kết nối ngang hàng không hợp lệ giữa các access_switch: tới {neighbor}")
+                else:
+                    reasons.append(f"Kết nối không hợp lệ tới lớp {neighbor_role}: {neighbor}")
+            elif role == "endpoint":
+                if neighbor_role == "access_switch":
+                    upstream_parents.append(neighbor)
+                else:
+                    reasons.append(f"Kết nối không hợp lệ tới lớp {neighbor_role}: {neighbor}")
 
-    if node_count == 0:
-        return {
-            "is_passed": True,
-            "global_compliance_summary": rule_config["global_summary"]["pass"],
-            "node_compliance_data": {},
-        }
-
-    hub_candidates = [
-        node for node in G.nodes() if G.degree(node) == required_hub_degree
-    ]
-    hub_candidates_label = ", ".join(sorted(hub_candidates)) or "none"
-
-    for device_name in G.nodes():
-        node_degree = G.degree(device_name)
-
-        if not hub_candidates:
+        # 5. Exactly one upstream parent
+        if expected_parent_role:
+            if len(upstream_parents) == 0:
+                reasons.append(f"Thiết bị không có parent ({expected_parent_role}) hợp lệ.")
+            elif len(upstream_parents) > 1:
+                reasons.append(f"Thiết bị có nhiều parent hợp lệ ({len(upstream_parents)}), yêu cầu chính xác 1.")
+                
+        # 2. Endpoints must be leaf nodes
+        if role == "endpoint" and G.degree(device_name) > 1:
+            reasons.append(f"Endpoint không được phép có thiết bị con (bậc {G.degree(device_name)} > 1).")
+            
+        # 6. Valid path to core switch
+        if role != "core_switch" and core_switches:
+            path_found = False
+            for core in core_switches:
+                if nx.has_path(G, device_name, core):
+                    path_found = True
+                    break
+            if not path_found:
+                reasons.append("Không có đường truyền hợp lệ tới bất kỳ core_switch nào.")
+        elif role != "core_switch" and not core_switches:
+            reasons.append("Không có đường truyền hợp lệ tới bất kỳ core_switch nào.")
+                
+        if reasons:
             node_compliance_data[device_name] = _non_compliant_node(
                 device_name,
                 rule_config,
-                template_key="hub_missing",
-                node_degree=node_degree,
-                required_hub_degree=required_hub_degree,
+                reason="; ".join(reasons)
             )
-        elif len(hub_candidates) > 1:
-            if device_name in hub_candidates:
-                node_compliance_data[device_name] = _non_compliant_node(
-                    device_name,
-                    rule_config,
-                    template_key="multiple_hubs",
-                    node_degree=node_degree,
-                    hub_candidates=hub_candidates_label,
-                )
-            elif node_degree != required_peripheral_degree:
-                node_compliance_data[device_name] = _non_compliant_node(
-                    device_name,
-                    rule_config,
-                    template_key="peripheral_invalid",
-                    node_degree=node_degree,
-                    required_peripheral_degree=required_peripheral_degree,
-                )
-            else:
-                node_compliance_data[device_name] = _compliant_node(
-                    device_name,
-                    rule_config,
-                    template_key="peripheral_pass",
-                    node_degree=node_degree,
-                    hub_device=hub_candidates[0],
-                )
         else:
-            hub_device = hub_candidates[0]
-            if device_name == hub_device:
-                if node_degree == required_hub_degree:
-                    node_compliance_data[device_name] = _compliant_node(
-                        device_name,
-                        rule_config,
-                        node_degree=node_degree,
-                        expected_role=metrics["expected_hub_role_label"],
-                    )
-                else:
-                    node_compliance_data[device_name] = _non_compliant_node(
-                        device_name,
-                        rule_config,
-                        template_key="hub_invalid",
-                        node_degree=node_degree,
-                        required_hub_degree=required_hub_degree,
-                        node_count=node_count,
-                    )
-            elif node_degree != required_peripheral_degree:
-                node_compliance_data[device_name] = _non_compliant_node(
-                    device_name,
-                    rule_config,
-                    template_key="peripheral_invalid",
-                    node_degree=node_degree,
-                    required_peripheral_degree=required_peripheral_degree,
-                )
-            else:
-                node_compliance_data[device_name] = _compliant_node(
-                    device_name,
-                    rule_config,
-                    template_key="peripheral_pass",
-                    node_degree=node_degree,
-                    hub_device=hub_device,
-                )
+            node_compliance_data[device_name] = _compliant_node(
+                device_name,
+                rule_config
+            )
 
+    # 7. Topology must not contain loops
+    try:
+        cycles = nx.cycle_basis(G)
+        if cycles:
+            for cycle in cycles:
+                for device_name in cycle:
+                    if node_compliance_data[device_name]["compliance_status"] == rule_config["compliance_status"]["pass"]:
+                        node_compliance_data[device_name] = _non_compliant_node(
+                            device_name,
+                            rule_config,
+                            reason="Thiết bị tham gia vào vòng lặp mạng không hợp lệ."
+                        )
+                    else:
+                        current_knowledge = node_compliance_data[device_name]["audit_knowledge"]
+                        if "vòng lặp" not in current_knowledge:
+                            node_compliance_data[device_name]["audit_knowledge"] = current_knowledge.rstrip(".") + "; Thiết bị tham gia vào vòng lặp mạng không hợp lệ."
+    except Exception:
+        pass
+        
     is_passed = all(
         node["compliance_status"] == rule_config["compliance_status"]["pass"]
         for node in node_compliance_data.values()

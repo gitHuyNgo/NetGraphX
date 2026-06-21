@@ -119,21 +119,30 @@ def main():
     if neo4j_store:
         neo4j_store.close()
 
-    print("\n[Step 4] Synchronizing metadata to Pyvis UI element layer...")
+    print("\n[Step 4] Generating vis.js topology map and companion metadata...")
     mismatch_details = vlan_mismatch_visualization_details(
         builder.G,
         topology.interfaces,
     ) or None
 
+    spof_list = spof_devices(compliance)
+
     builder.generate_html_visualization(
         filename="topology.html",
         mismatch_list=mismatch_details,
-        bottlenecks_list=spof_devices(compliance),
+        bottlenecks_list=spof_list,
+    )
+
+    builder.save_topology_metadata(
+        filename="topology_data.json",
+        mismatch_list=mismatch_details,
+        bottlenecks_list=spof_list,
     )
 
     print("\n==================================================")
-    print(" PROCESSING COMPLETED: Please open 'topology.html' ")
-    print(" to inspect your network graph mapping layout.")
+    print(" PROCESSING COMPLETED:")
+    print("   topology.html      — open in browser for standalone view")
+    print("   topology_data.json — consumed by Streamlit dashboard")
     print("==================================================")
 
 

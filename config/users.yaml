@@ -1,0 +1,21 @@
+# NetGraphX User Configuration
+# ==============================
+# Roles: admin | engineer
+#
+# To generate a password hash:
+#   python -c "import hashlib; print(hashlib.sha256('yourpassword'.encode()).hexdigest())"
+#
+# IMPORTANT: Change the default passwords before deploying to production!
+#
+# Default credentials:
+#   admin    / admin123
+#   engineer / engineer123
+
+users:
+  - username: admin
+    password_hash: "240be518fabd2724ddb6f04eeb1da5967448d7e831c08c8fa822809f74c720a9"
+    role: admin
+
+  - username: engineer
+    password_hash: "80ca306ac6e68366dd0a26125c9647e0c61fac6668cec6016f5fe30fb12e99bd"
+    role: engineer

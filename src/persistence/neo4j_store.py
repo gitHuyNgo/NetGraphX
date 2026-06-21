@@ -61,17 +61,17 @@ def _build_device_description(
     # Build error summary section
     errors = []
     if is_spof:
-        errors.append("⚠️ SPOF (Điểm thất bại đơn lẻ - Single Point of Failure): thiết bị này là nút cổ chai quan trọng, nếu gặp sự cố toàn bộ kết nối phụ thuộc sẽ bị gián đoạn")
+        errors.append("SPOF (Điểm thất bại đơn lẻ): thiết bị này là nút cổ chai quan trọng, nếu gặp sự cố toàn bộ kết nối phụ thuộc sẽ bị gián đoạn")
     if is_loop:
-        errors.append("🔄 Vòng lặp mạng (Network Loop): thiết bị tham gia vào một vòng lặp L2 bất hợp lệ có thể gây broadcast storm")
+        errors.append("Vòng lặp mạng: thiết bị tham gia vào một vòng lặp L2 bất hợp lệ có thể gây broadcast storm")
     if has_topology_violation:
         reason_str = topology_violation_reason or "vi phạm cấu trúc mạng"
-        errors.append(f"❌ Vi phạm cấu trúc (Topology Violation): {reason_str}")
+        errors.append(f"Vi phạm cấu trúc: {reason_str}")
 
     if errors:
         error_summary = "Các lỗi đang tồn tại: " + "; ".join(errors) + "."
     else:
-        error_summary = "✅ Thiết bị an toàn, không phát hiện lỗi cấu trúc."
+        error_summary = "Thiết bị an toàn, không phát hiện lỗi cấu trúc."
 
     return (
         f"Thiết bị {name} là một {role_str} thuộc hãng {vendor_str}, model {model_str}. "
@@ -115,11 +115,11 @@ def _build_interface_description(
 
     errors = []
     if is_loop:
-        errors.append("🔄 Tham gia vòng lặp mạng L2")
+        errors.append("Tham gia vòng lặp mạng L2")
     if has_vlan_mismatch:
-        errors.append("⚠️ Có sự không khớp VLAN với cổng đầu đối diện")
+        errors.append("Có sự không khớp VLAN với cổng đầu đối diện")
 
-    error_str = " | Lỗi: " + "; ".join(errors) if errors else " | ✅ Không có lỗi."
+    error_str = " | Lỗi: " + "; ".join(errors) if errors else " | Không có lỗi."
 
     return (
         f"Cổng {name} thuộc thiết bị {device_name}. "
@@ -512,13 +512,13 @@ class Neo4jTopologyStore:
                 'Địa chỉ IP chính: ' + coalesce(d.primary_ip, 'chưa gán') + '. ' +
                 'Trạng thái: ' + coalesce(d.status, 'không rõ') + '. ' +
                 CASE 
-                    WHEN d.is_SPOF AND d.is_loop THEN '⚠️ Lỗi SPOF và vòng lặp mạng đang tồn tại.'
-                    WHEN d.is_SPOF THEN '⚠️ Lỗi SPOF: thiết bị là điểm thất bại đơn lẻ.'
-                    WHEN d.is_loop THEN '🔄 Lỗi vòng lặp mạng L2 đang tồn tại.'
-                    ELSE '✅ Thiết bị an toàn, không phát hiện lỗi cấu trúc.'
+                    WHEN d.is_SPOF AND d.is_loop THEN 'Lỗi SPOF và vòng lặp mạng đang tồn tại.'
+                    WHEN d.is_SPOF THEN 'Lỗi SPOF: thiết bị là điểm thất bại đơn lẻ.'
+                    WHEN d.is_loop THEN 'Lỗi vòng lặp mạng L2 đang tồn tại.'
+                    ELSE 'Thiết bị an toàn, không phát hiện lỗi cấu trúc.'
                 END +
                 CASE 
-                    WHEN d.has_topology_violation THEN ' ❌ Vi phạm cấu trúc: ' + coalesce(d.topology_violation_reason, 'không rõ lý do') + '.'
+                    WHEN d.has_topology_violation THEN ' Vi phạm cấu trúc: ' + coalesce(d.topology_violation_reason, 'không rõ lý do') + '.'
                     ELSE ''
                 END
             """
@@ -532,10 +532,10 @@ class Neo4jTopologyStore:
                 'Cổng ' + i.name + ' thuộc thiết bị ' + d.name + '. ' +
                 'Chế độ: ' + coalesce(i.mode, 'không xác định') + '. ' +
                 CASE 
-                    WHEN i.is_loop AND i.has_vlan_mismatch THEN '🔄 Tham gia vòng lặp mạng. ⚠️ VLAN mismatch.'
-                    WHEN i.is_loop THEN '🔄 Tham gia vòng lặp mạng L2.'
-                    WHEN i.has_vlan_mismatch THEN '⚠️ Có sự không khớp VLAN với cổng đầu đối diện.'
-                    ELSE '✅ Cổng hoạt động bình thường.'
+                    WHEN i.is_loop AND i.has_vlan_mismatch THEN 'Tham gia vòng lặp mạng. Không khớp VLAN.'
+                    WHEN i.is_loop THEN 'Tham gia vòng lặp mạng L2.'
+                    WHEN i.has_vlan_mismatch THEN 'Có sự không khớp VLAN với cổng đầu đối diện.'
+                    ELSE 'Cổng hoạt động bình thường.'
                 END
             """
         )

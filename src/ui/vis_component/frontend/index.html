@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8" />
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      background: transparent;
+    }
+
+    #root,
+    #vis-iframe {
+      width: 100%;
+      height: 100vh;
+      border: none;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="root"></div>
+  <script>
+    function sendMessageToStreamlit(type, data) {
+      const msgType = type.startsWith("streamlit:") ? type : "streamlit:" + type;
+      window.parent.postMessage({
+        isStreamlitMessage: true,
+        type: msgType,
+        ...data
+      }, "*");
+    }
+
+    window.sendNodeClick = function (nodeId) {
+      sendMessageToStreamlit("setComponentValue", { value: nodeId });
+    };
+
+    window.addEventListener("message", function (event) {
+      if (event.data.type === "streamlit:render") {
+        const args = event.data.args;
+        const htmlContent = args.html;
+        const highlight = args.highlight;
+        const height = args.height || 460;
+
+        sendMessageToStreamlit("setFrameHeight", { height: height });
+
+        let iframe = document.getElementById("vis-iframe");
+
+        // Recreate the iframe only if the full HTML string changed (e.g. filters changed)
+        if (window.lastHtml !== htmlContent || !iframe) {
+          window.lastHtml = htmlContent;
+          if (iframe) { iframe.remove(); }
+
+          iframe = document.createElement("iframe");
+          iframe.id = "vis-iframe";
+          iframe.srcdoc = htmlContent;
+          document.getElementById("root").appendChild(iframe);
+        }
+
+        // If the HTML is the same, just apply the dynamic highlight via JS!
+        if (window.lastHighlight !== highlight) {
+          window.lastHighlight = highlight;
+          // Need a slight delay if the iframe was JUST created
+          setTimeout(() => {
+            const currentIframe = document.getElementById("vis-iframe");
+            if (currentIframe && currentIframe.contentWindow && currentIframe.contentWindow.highlightNode) {
+              currentIframe.contentWindow.highlightNode(highlight);
+            }
+          }, 500);
+        }
+      }
+    });
+
+    sendMessageToStreamlit("componentReady", { apiVersion: 1 });
+  </script>
+</body>
+
+</html>

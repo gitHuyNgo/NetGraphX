@@ -9,25 +9,25 @@
       "non_compliant_star"
     ],
     "merged_compliance": {
-      "pass_knowledge_template": "Device {device_name} satisfies all configured network audit rules: loop detection, single point of failure analysis, VLAN consistency validation, and star topology verification.",
-      "global_pass_summary": "All configured network audit rules passed. The topology is compliant with loop, resilience, VLAN, and star topology requirements.",
-      "global_fail_summary": "One or more network audit rules reported violations. Review node-level compliance_status and audit_knowledge properties for remediation guidance."
+      "pass_knowledge_template": "Thiết bị {device_name} thỏa mãn mọi quy tắc kiểm tra mạng: vòng lặp, điểm thất bại đơn lẻ, đồng bộ VLAN và cấu trúc hình sao.",
+      "global_pass_summary": "Tất cả các kiểm tra mạng đều thành công. Cấu trúc mạng tuân thủ yêu cầu về vòng lặp, tính dự phòng, VLAN và cấu trúc hình sao.",
+      "global_fail_summary": "Có một hoặc nhiều vi phạm trong quá trình kiểm tra mạng. Vui lòng xem trạng thái compliance_status và audit_knowledge tại từng thiết bị để biết cách khắc phục."
     }
   },
   "network_loop": {
     "rule_id": "network_loop",
-    "rule_name": "Layer-Two Loop Detection",
+    "rule_name": "Kiểm tra vòng lặp mạng lớp 2 (Layer-Two Loop)",
     "compliance_status": {
       "pass": "compliant",
       "fail": "non_compliant_loop"
     },
     "global_summary": {
-      "pass": "Layer-two loop detection passed. No circular physical paths were identified in the topology graph.",
-      "fail": "Layer-two loop detection failed. One or more circular paths exist and may cause broadcast storms or MAC table instability."
+      "pass": "Kiểm tra vòng lặp mạng lớp 2 thành công. Không phát hiện đường dẫn vòng vật lý nào trong mạng.",
+      "fail": "Kiểm tra vòng lặp mạng lớp 2 thất bại. Tồn tại một hoặc nhiều đường vòng có thể gây bão broadcast hoặc mất ổn định bảng MAC."
     },
     "node_knowledge_template": {
-      "pass": "Device {device_name} is not participating in any detected layer-two loop. All adjacent links form an acyclic spanning structure at this node.",
-      "fail": "Device {device_name} participates in a layer-two loop. Circular path: {cycle_path}. All devices in the cycle: {cycle_devices}."
+      "pass": "Thiết bị {device_name} không tham gia vào vòng lặp mạng lớp 2 nào. Các kết nối tạo thành mạng không có chu trình (acyclic).",
+      "fail": "Thiết bị {device_name} đang tham gia vào vòng lặp mạng lớp 2. Chu trình: {cycle_path}. Các thiết bị trong chu trình: {cycle_devices}."
     },
     "metrics": {
       "cycle_orientation": "ignore"
@@ -35,18 +35,18 @@
   },
   "single_point_of_failure": {
     "rule_id": "single_point_of_failure",
-    "rule_name": "Single Point of Failure Detection",
+    "rule_name": "Kiểm tra điểm thất bại đơn lẻ (SPOF)",
     "compliance_status": {
       "pass": "compliant",
       "fail": "non_compliant_spof"
     },
     "global_summary": {
-      "pass": "Single point of failure analysis passed. No articulation points were identified that would partition the network upon device failure.",
-      "fail": "Single point of failure analysis failed. One or more devices are articulation points whose failure would isolate network segments."
+      "pass": "Kiểm tra điểm thất bại đơn lẻ thành công. Không phát hiện thiết bị nào làm đứt gãy mạng khi gặp sự cố.",
+      "fail": "Kiểm tra điểm thất bại đơn lẻ thất bại. Một hoặc nhiều thiết bị là điểm đứt gãy (articulation point) làm cô lập phân vùng mạng nếu gặp sự cố."
     },
     "node_knowledge_template": {
-      "pass": "Device {device_name} is not a single point of failure. Removing this device would not partition the remaining topology graph.",
-      "fail": "Device {device_name} is a single point of failure (articulation point). Failure or maintenance on this device will isolate connected network segments. Adjacent devices: {adjacent_devices}."
+      "pass": "Thiết bị {device_name} không phải là điểm thất bại đơn lẻ. Gỡ bỏ thiết bị này không chia cắt mạng.",
+      "fail": "Thiết bị {device_name} là điểm thất bại đơn lẻ. Nếu thiết bị gặp sự cố hoặc bảo trì, mạng sẽ bị cô lập. Các thiết bị lân cận: {adjacent_devices}."
     },
     "metrics": {
       "analysis_method": "articulation_points"
@@ -54,48 +54,46 @@
   },
   "vlan_mismatch": {
     "rule_id": "vlan_mismatch",
-    "rule_name": "Cross-Port VLAN Consistency Validation",
+    "rule_name": "Kiểm tra tính đồng nhất VLAN giữa các cổng",
     "compliance_status": {
       "pass": "compliant",
       "fail": "non_compliant_vlan"
     },
     "global_summary": {
-      "pass": "VLAN consistency validation passed. All cabled port pairs report matching VLAN identifiers on both ends.",
-      "fail": "VLAN consistency validation failed. One or more cabled port pairs terminate on ports assigned to different VLAN identifiers."
+      "pass": "Kiểm tra đồng nhất VLAN thành công. Mọi cặp cổng cáp nối đều có mã VLAN khớp nhau ở hai đầu.",
+      "fail": "Kiểm tra đồng nhất VLAN thất bại. Có cặp cổng cáp nối đang gán khác mã VLAN."
     },
     "node_knowledge_template": {
-      "pass": "Device {device_name} has no detected VLAN mismatches on any cabled interface participating in the topology graph.",
-      "fail": "Device {device_name} has a VLAN mismatch on cabled interface {local_interface} connected to {peer_device} interface {peer_interface}. Local VLAN ID: {local_vlan_id}. Peer VLAN ID: {peer_vlan_id}. Cable ID: {cable_id}."
+      "pass": "Thiết bị {device_name} không phát hiện lỗi bất đồng VLAN trên bất kỳ cổng kết nối nào.",
+      "fail": "Thiết bị {device_name} có lỗi bất đồng VLAN tại cổng {local_interface} nối với {peer_device} tại cổng {peer_interface}. VLAN phía thiết bị: {local_vlan_id}. VLAN phía đối tác: {peer_vlan_id}. ID cáp nối: {cable_id}."
     },
     "metrics": {
       "require_both_vlan_values": true
     },
-    "link_knowledge_template": "Physical link between {source_device} and {target_device} has mismatched VLAN assignments. {source_device} interface {source_interface} uses VLAN {source_vlan_id} while {target_device} interface {target_interface} uses VLAN {target_vlan_id}."
+    "link_knowledge_template": "Kết nối vật lý giữa {source_device} và {target_device} bị lệch VLAN. {source_device} cổng {source_interface} dùng VLAN {source_vlan_id} trong khi {target_device} cổng {target_interface} dùng VLAN {target_vlan_id}."
   },
   "star_topology": {
     "rule_id": "star_topology",
-    "rule_name": "Strict Star Topology Validation",
+    "rule_name": "Kiểm tra cấu trúc mạng hình sao mở rộng",
     "compliance_status": {
       "pass": "compliant",
       "fail": "non_compliant_star"
     },
     "global_summary": {
-      "pass": "Star topology validation passed. The graph contains exactly one central hub with degree N-1 and all peripheral nodes have degree 1.",
-      "fail": "Star topology validation failed. The graph does not conform to strict star specifications."
+      "pass": "Kiểm tra cấu trúc mạng hình sao mở rộng thành công. Mạng tuân thủ kiến trúc phân cấp.",
+      "fail": "Kiểm tra cấu trúc mạng hình sao mở rộng thất bại. Một hoặc nhiều thiết bị vi phạm quy tắc kết nối phân cấp."
     },
     "node_knowledge_template": {
-      "pass": "Device {device_name} conforms to strict star topology requirements. Node degree: {node_degree}. Expected role: {expected_role}.",
-      "hub_missing": "Device {device_name} cannot conform to star topology because no valid central hub exists. Node degree: {node_degree}. A star requires exactly one hub with degree {required_hub_degree}.",
-      "hub_invalid": "Device {device_name} is designated as the central hub but its degree is {node_degree}. A valid hub must have degree {required_hub_degree} (N-1) for a graph with {node_count} devices.",
-      "multiple_hubs": "Device {device_name} qualifies as a central hub candidate but multiple hub candidates were detected: {hub_candidates}. A strict star allows exactly one hub.",
-      "peripheral_invalid": "Device {device_name} is a peripheral node but its degree is {node_degree}. Peripheral nodes in a strict star must have degree exactly {required_peripheral_degree}. Additional links indicate illegal cross-connections or mesh paths.",
-      "peripheral_pass": "Device {device_name} is a valid peripheral node in the star topology with degree {node_degree}, connected only to the central hub {hub_device}."
+      "pass": "Thiết bị {device_name} tuân thủ đúng cấu trúc mạng hình sao phân cấp.",
+      "fail": "{reason}"
     },
     "metrics": {
-      "required_peripheral_degree": 1,
-      "hub_degree_formula": "node_count_minus_one",
-      "expected_hub_role_label": "hub",
-      "expected_peripheral_role_label": "peripheral"
+      "allowed_roles": [
+        "core_switch",
+        "distribution_switch",
+        "access_switch",
+        "endpoint"
+      ]
     }
   }
 }
