@@ -32,9 +32,12 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
+import logging
 from typing import List, Optional
 
 from config.settings import llm_config
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -60,7 +63,7 @@ class ParsedQuery:
 
 _SYSTEM_PROMPT = """\
 Bạn là một trợ lý phân tích mạng lưới viễn thông. Nhiệm vụ của bạn là phân tích câu hỏi của người dùng \
-và trích xuất ra các "ý định" (intent) rõ ràng.
+(có thể bằng tiếng Việt hoặc tiếng Anh) và trích xuất ra các "ý định" (intent) rõ ràng.
 
 ## QUY TẮC BẮT BUỘC:
 1. Chỉ trả về JSON thuần túy, KHÔNG có markdown, KHÔNG có giải thích, KHÔNG có ```json``` block.
@@ -73,6 +76,7 @@ và trích xuất ra các "ý định" (intent) rõ ràng.
 7. Trường "clean_query" chỉ giữ lại thông tin cốt lõi, loại bỏ câu chào hỏi, văn phong thừa.
 8. Nếu câu hỏi có nhiều ý định, liệt kê tất cả trong mảng "intents".
 9. TUYỆT ĐỐI không thêm bất kỳ nội dung nào ngoài JSON.
+10. HIỂU CẢ TIẾNG ANH VÀ TIẾNG VIỆT. VD: "how many vlan mismatch" -> type: "scan_errors", target: "vlan_mismatch".
 
 ## VÍ DỤ CÂU HỎI ĐƠN Ý ĐỊNH (single-intent):
 
@@ -87,6 +91,10 @@ Output:
 Câu hỏi: "Có lỗi VLAN mismatch ở đâu không?"
 Output:
 {"intents":[{"type":"scan_errors","target":"vlan_mismatch","clean_query":"lỗi VLAN mismatch"}]}
+
+Câu hỏi: "how many vlan mismatch"
+Output:
+{"intents":[{"type":"scan_errors","target":"vlan_mismatch","clean_query":"vlan mismatch"}]}
 
 Câu hỏi: "Liệt kê tất cả các thiết bị đang gặp lỗi"
 Output:
@@ -147,8 +155,8 @@ class MultiIntentQueryParser:
                 ],
             )
             raw_text = response.choices[0].message.content.strip()
-        except Exception as exc:
-            print(f"[QueryParser] LLM call failed: {exc}")
+        except Exception as exc:  # Exception used here due to lazy loading of openai
+            logger.error(f"[QueryParser] LLM call failed: {exc}")
             return self._fallback_general(user_query)
 
         try:
@@ -166,7 +174,7 @@ class MultiIntentQueryParser:
                 return self._fallback_general(user_query)
             return ParsedQuery(intents=intents, raw_response=raw_text)
         except (json.JSONDecodeError, KeyError, TypeError) as exc:
-            print(f"[QueryParser] Failed to parse LLM JSON output: {exc}\nRaw: {raw_text}")
+            logger.error(f"[QueryParser] Failed to parse LLM JSON output: {exc}\nRaw: {raw_text}")
             return self._fallback_general(user_query)
 
     # ------------------------------------------------------------------

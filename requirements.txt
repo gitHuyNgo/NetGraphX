@@ -1,9 +1,13 @@
-pynetbox 
-networkx 
+pynetbox
+networkx
 pyvis
-dotenv
 neo4j
 sentence-transformers
 openai
 python-dotenv
 streamlit
+flask
+pyyaml
+torchvision
+scikit-learn
+pandas

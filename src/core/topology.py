@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from src.data.netbox_client import NetBoxClient
+    from src.data_pipeline.netbox_client import NetBoxClient
 
 
 @dataclass

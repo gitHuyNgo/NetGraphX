@@ -259,7 +259,7 @@ def detect_single_points_of_failure(
             ],
             "node_compliance_data": node_compliance_data,
         }
-    except Exception as exc:
+    except nx.NetworkXError as exc:
         return {
             "is_passed": False,
             "global_compliance_summary": (
@@ -332,112 +332,130 @@ def detect_vlan_mismatch(
     }
 
 
+
+def _check_role_validity(role: str, role_raw: str, allowed_roles: list) -> list:
+    if role not in allowed_roles:
+        return [f"Vai trò thiết bị không hợp lệ hoặc không được hỗ trợ: {role_raw}"]
+    return []
+
+def _check_adjacency(role: str, neighbor: str, neighbor_role: str, edge_data: dict, upstream_parents: list) -> list:
+    reasons = []
+    if role == "core_switch":
+        if neighbor_role not in ["distribution_switch", "core_switch"]:
+            reasons.append(f"Kết nối không hợp lệ tới lớp {neighbor_role}: {neighbor}")
+    elif role == "distribution_switch":
+        if neighbor_role == "core_switch":
+            upstream_parents.append(neighbor)
+        elif neighbor_role == "access_switch":
+            pass
+        elif neighbor_role == "distribution_switch":
+            status = edge_data.get("status", "").lower()
+            if status not in ["redundancy", "redundant"]:
+                reasons.append(f"Kết nối ngang hàng giữa các distribution_switch không được đánh dấu là redundancy: tới {neighbor}")
+        else:
+            reasons.append(f"Kết nối không hợp lệ tới lớp {neighbor_role}: {neighbor}")
+    elif role == "access_switch":
+        if neighbor_role == "distribution_switch":
+            upstream_parents.append(neighbor)
+        elif neighbor_role == "endpoint":
+            pass
+        elif neighbor_role == "access_switch":
+            reasons.append(f"Kết nối ngang hàng không hợp lệ giữa các access_switch: tới {neighbor}")
+        else:
+            reasons.append(f"Kết nối không hợp lệ tới lớp {neighbor_role}: {neighbor}")
+    elif role == "endpoint":
+        if neighbor_role == "access_switch":
+            upstream_parents.append(neighbor)
+        else:
+            reasons.append(f"Kết nối không hợp lệ tới lớp {neighbor_role}: {neighbor}")
+    return reasons
+
+def _check_upstream_parents(expected_parent_role: str, upstream_parents: list) -> list:
+    if not expected_parent_role:
+        return []
+    if len(upstream_parents) == 0:
+        return [f"Thiết bị không có parent ({expected_parent_role}) hợp lệ."]
+    elif len(upstream_parents) > 1:
+        return [f"Thiết bị có nhiều parent hợp lệ ({len(upstream_parents)}), yêu cầu chính xác 1."]
+    return []
+
+def _check_endpoint_leaf(role: str, degree: int) -> list:
+    if role == "endpoint" and degree > 1:
+        return [f"Endpoint không được phép có thiết bị con (bậc {degree} > 1)."]
+    return []
+
+def _check_core_path(device_name: str, role: str, core_switches: list, G) -> list:
+    if role == "core_switch":
+        return []
+    if not core_switches:
+        return ["Không có đường truyền hợp lệ tới bất kỳ core_switch nào."]
+    import networkx as nx
+    for core in core_switches:
+        if nx.has_path(G, device_name, core):
+            return []
+    return ["Không có đường truyền hợp lệ tới bất kỳ core_switch nào."]
+
+def _get_expected_parent_role(role: str) -> str:
+    if role == "distribution_switch": return "core_switch"
+    if role == "access_switch": return "distribution_switch"
+    if role == "endpoint": return "access_switch"
+    return None
+
 def verify_star_topology(
     G: nx.Graph,
     config_path: Optional[str] = None,
 ) -> AuditResult:
     audit_config = load_audit_config(config_path)
     rule_config = audit_config["star_topology"]
-    metrics = rule_config["metrics"]
-    node_count = G.number_of_nodes()
-    required_peripheral_degree = metrics["required_peripheral_degree"]
-    required_hub_degree = max(node_count - 1, 0)
-    node_compliance_data: Dict[str, NodeComplianceData] = {}
-
-    if node_count == 0:
-        return {
-            "is_passed": True,
-            "global_compliance_summary": rule_config["global_summary"]["pass"],
-            "node_compliance_data": {},
-        }
-
-    hub_candidates = [
-        node for node in G.nodes() if G.degree(node) == required_hub_degree
-    ]
-    hub_candidates_label = ", ".join(sorted(hub_candidates)) or "none"
-
-    for device_name in G.nodes():
-        node_degree = G.degree(device_name)
-
-        if not hub_candidates:
-            node_compliance_data[device_name] = _non_compliant_node(
-                device_name,
-                rule_config,
-                template_key="hub_missing",
-                node_degree=node_degree,
-                required_hub_degree=required_hub_degree,
-            )
-        elif len(hub_candidates) > 1:
-            if device_name in hub_candidates:
-                node_compliance_data[device_name] = _non_compliant_node(
-                    device_name,
-                    rule_config,
-                    template_key="multiple_hubs",
-                    node_degree=node_degree,
-                    hub_candidates=hub_candidates_label,
-                )
-            elif node_degree != required_peripheral_degree:
-                node_compliance_data[device_name] = _non_compliant_node(
-                    device_name,
-                    rule_config,
-                    template_key="peripheral_invalid",
-                    node_degree=node_degree,
-                    required_peripheral_degree=required_peripheral_degree,
-                )
-            else:
-                node_compliance_data[device_name] = _compliant_node(
-                    device_name,
-                    rule_config,
-                    template_key="peripheral_pass",
-                    node_degree=node_degree,
-                    hub_device=hub_candidates[0],
-                )
+    allowed_roles = rule_config["metrics"].get("allowed_roles", ["core_switch", "distribution_switch", "access_switch", "endpoint"])
+    
+    node_compliance_data = {}
+    core_switches = [n for n, d in G.nodes(data=True) if (d.get("role") or "").lower().replace(" ", "_").replace("-", "_") == "core_switch"]
+    
+    for device_name, data in G.nodes(data=True):
+        role_raw = data.get("role")
+        role = role_raw.lower().replace(" ", "_").replace("-", "_") if role_raw else ""
+        
+        reasons = []
+        reasons.extend(_check_role_validity(role, role_raw, allowed_roles))
+        
+        upstream_parents = []
+        for neighbor in G.neighbors(device_name):
+            neighbor_role_raw = G.nodes[neighbor].get("role")
+            neighbor_role = neighbor_role_raw.lower().replace(" ", "_").replace("-", "_") if neighbor_role_raw else ""
+            edge_data = G.edges[device_name, neighbor]
+            reasons.extend(_check_adjacency(role, neighbor, neighbor_role, edge_data, upstream_parents))
+            
+        expected_parent = _get_expected_parent_role(role)
+        reasons.extend(_check_upstream_parents(expected_parent, upstream_parents))
+        reasons.extend(_check_endpoint_leaf(role, G.degree(device_name)))
+        reasons.extend(_check_core_path(device_name, role, core_switches, G))
+        
+        if reasons:
+            node_compliance_data[device_name] = _non_compliant_node(device_name, rule_config, reason="; ".join(reasons))
         else:
-            hub_device = hub_candidates[0]
-            if device_name == hub_device:
-                if node_degree == required_hub_degree:
-                    node_compliance_data[device_name] = _compliant_node(
-                        device_name,
-                        rule_config,
-                        node_degree=node_degree,
-                        expected_role=metrics["expected_hub_role_label"],
-                    )
-                else:
-                    node_compliance_data[device_name] = _non_compliant_node(
-                        device_name,
-                        rule_config,
-                        template_key="hub_invalid",
-                        node_degree=node_degree,
-                        required_hub_degree=required_hub_degree,
-                        node_count=node_count,
-                    )
-            elif node_degree != required_peripheral_degree:
-                node_compliance_data[device_name] = _non_compliant_node(
-                    device_name,
-                    rule_config,
-                    template_key="peripheral_invalid",
-                    node_degree=node_degree,
-                    required_peripheral_degree=required_peripheral_degree,
-                )
-            else:
-                node_compliance_data[device_name] = _compliant_node(
-                    device_name,
-                    rule_config,
-                    template_key="peripheral_pass",
-                    node_degree=node_degree,
-                    hub_device=hub_device,
-                )
+            node_compliance_data[device_name] = _compliant_node(device_name, rule_config)
 
-    is_passed = all(
-        node["compliance_status"] == rule_config["compliance_status"]["pass"]
-        for node in node_compliance_data.values()
-    )
+    try:
+        cycles = nx.cycle_basis(G)
+        if cycles:
+            for cycle in cycles:
+                for device_name in cycle:
+                    if node_compliance_data[device_name]["compliance_status"] == rule_config["compliance_status"]["pass"]:
+                        node_compliance_data[device_name] = _non_compliant_node(
+                            device_name,
+                            rule_config,
+                            reason="Thiết bị nằm trong một vòng lặp mạng (loop), vi phạm cấu trúc hình sao (star topology)."
+                        )
+                    else:
+                        node_compliance_data[device_name]["audit_knowledge"] += " | Thiết bị nằm trong một vòng lặp mạng (loop), vi phạm cấu trúc hình sao (star topology)."
+    except Exception:
+        pass
 
+    is_passed = all(d["compliance_status"] == rule_config["compliance_status"]["pass"] for d in node_compliance_data.values())
     return {
         "is_passed": is_passed,
-        "global_compliance_summary": rule_config["global_summary"][
-            "pass" if is_passed else "fail"
-        ],
+        "global_compliance_summary": rule_config["global_summary"]["pass" if is_passed else "fail"],
         "node_compliance_data": node_compliance_data,
     }
 
@@ -548,3 +566,113 @@ def vlan_mismatch_visualization_details(
             }
         )
     return details
+
+# ---------------------------------------------------------------------------
+# Vietnamese description builders (Task 1)
+# ---------------------------------------------------------------------------
+
+def build_device_description(
+    name: str,
+    role: Optional[str],
+    vendor: Optional[str],
+    model: Optional[str],
+    site: Optional[str],
+    rack: Optional[str],
+    primary_ip: Optional[str],
+    status: Optional[str],
+    is_spof: bool = False,
+    is_loop: bool = False,
+    has_topology_violation: bool = False,
+    topology_violation_reason: Optional[str] = None,
+) -> str:
+    """
+    Builds a rich Vietnamese natural-language description for a Device node.
+    Encodes all structural and audit fields into a single searchable text blob.
+    """
+    role_str = role or "thiết bị mạng không xác định"
+    vendor_str = vendor or "hãng không xác định"
+    model_str = model or "không rõ model"
+    site_str = site or "vị trí không xác định"
+    ip_str = primary_ip or "chưa gán"
+
+    rack_part = f", tủ rack {rack}" if rack else ""
+    status_map = {
+        "active": "đang hoạt động bình thường",
+        "planned": "đang trong giai đoạn lên kế hoạch",
+        "staged": "đã được triển khai, chờ kích hoạt",
+        "failed": "đã gặp sự cố và ngừng hoạt động",
+        "decommissioning": "đang trong quá trình gỡ bỏ",
+        "inventory": "đang được lưu kho",
+        "offline": "đang offline",
+    }
+    status_detail = status_map.get(status or "", f"trạng thái: {status or 'không rõ'}")
+
+    # Build error summary section
+    errors = []
+    if is_spof:
+        errors.append("SPOF (Điểm thất bại đơn lẻ): thiết bị này là nút cổ chai quan trọng, nếu gặp sự cố toàn bộ kết nối phụ thuộc sẽ bị gián đoạn")
+    if is_loop:
+        errors.append("Vòng lặp mạng: thiết bị tham gia vào một vòng lặp L2 bất hợp lệ có thể gây broadcast storm")
+    if has_topology_violation:
+        reason_str = topology_violation_reason or "vi phạm cấu trúc mạng"
+        errors.append(f"Vi phạm cấu trúc: {reason_str}")
+
+    if errors:
+        error_summary = "Các lỗi đang tồn tại: " + "; ".join(errors) + "."
+    else:
+        error_summary = "Thiết bị an toàn, không phát hiện lỗi cấu trúc."
+
+    return (
+        f"Thiết bị {name} là một {role_str} thuộc hãng {vendor_str}, model {model_str}. "
+        f"Vị trí: {site_str}{rack_part}. "
+        f"Địa chỉ IP chính: {ip_str}. "
+        f"Trạng thái hiện tại: {status_detail}. "
+        f"{error_summary}"
+    )
+
+
+def build_interface_description(
+    name: str,
+    device_name: str,
+    mode: Optional[str],
+    untagged_vlan: Optional[Dict[str, Any]],
+    tagged_vlans: Optional[List[Dict[str, Any]]],
+    is_loop: bool = False,
+    has_vlan_mismatch: bool = False,
+) -> str:
+    """
+    Builds a Vietnamese natural-language description for an Interface node.
+    """
+    mode_map = {
+        "access": "access (kết nối thiết bị đầu cuối, mang một VLAN duy nhất)",
+        "tagged": "trunk (mang nhiều VLAN có gán nhãn)",
+        "tagged-all": "trunk toàn bộ VLAN",
+        "q-in-q": "Q-in-Q (VLAN lồng nhau)",
+    }
+    mode_str = mode_map.get(mode or "", f"chế độ {mode or 'không xác định'}")
+
+    vlan_parts = []
+    if untagged_vlan:
+        vid = untagged_vlan.get("vid")
+        vname = untagged_vlan.get("name", "")
+        vlan_parts.append(f"VLAN không gán nhãn: {vid} ({vname})")
+    if tagged_vlans:
+        vids = ", ".join(str(v.get("vid")) for v in tagged_vlans if v.get("vid"))
+        vlan_parts.append(f"VLAN gán nhãn: {vids}")
+
+    vlan_str = "; ".join(vlan_parts) if vlan_parts else "chưa gán VLAN"
+
+    errors = []
+    if is_loop:
+        errors.append("Tham gia vòng lặp mạng L2")
+    if has_vlan_mismatch:
+        errors.append("Có sự không khớp VLAN với cổng đầu đối diện")
+
+    error_str = " | Lỗi: " + "; ".join(errors) if errors else " | Không có lỗi."
+
+    return (
+        f"Cổng {name} thuộc thiết bị {device_name}. "
+        f"Chế độ hoạt động: {mode_str}. "
+        f"{vlan_str}."
+        f"{error_str}"
+    )

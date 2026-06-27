@@ -14,6 +14,7 @@ Similarity  : cosine
 
 from __future__ import annotations
 
+import logging
 from typing import List
 
 from neo4j import Driver
@@ -23,6 +24,8 @@ _DEVICE_INDEX = "device_embedding_index"
 _INTERFACE_INDEX = "interface_embedding_index"
 _EMBEDDING_DIM = 384
 
+logger = logging.getLogger(__name__)
+
 
 class NodeEmbedder:
     """
@@ -31,11 +34,11 @@ class NodeEmbedder:
     """
 
     def __init__(self, model_name: str = _MODEL_NAME) -> None:
-        print(f"[Embedder] Loading model: {model_name} …")
+        logger.info(f"[Embedder] Loading model: {model_name} …")
         # Lazy import so the rest of the app doesn't require sentence-transformers
         from sentence_transformers import SentenceTransformer  # type: ignore
         self._model = SentenceTransformer(model_name)
-        print("[Embedder] Model loaded.")
+        logger.info("[Embedder] Model loaded.")
 
     # ------------------------------------------------------------------
     # Public API
@@ -69,7 +72,7 @@ class NodeEmbedder:
             }
 
             if _DEVICE_INDEX not in existing:
-                print(f"[Embedder] Creating vector index '{_DEVICE_INDEX}' …")
+                logger.info(f"[Embedder] Creating vector index '{_DEVICE_INDEX}' …")
                 session.run(
                     f"""
                     CREATE VECTOR INDEX {_DEVICE_INDEX} IF NOT EXISTS
@@ -82,12 +85,12 @@ class NodeEmbedder:
                     }}
                     """
                 )
-                print(f"[Embedder] Index '{_DEVICE_INDEX}' created.")
+                logger.info(f"[Embedder] Index '{_DEVICE_INDEX}' created.")
             else:
-                print(f"[Embedder] Index '{_DEVICE_INDEX}' already exists — skipping.")
+                logger.info(f"[Embedder] Index '{_DEVICE_INDEX}' already exists — skipping.")
 
             if _INTERFACE_INDEX not in existing:
-                print(f"[Embedder] Creating vector index '{_INTERFACE_INDEX}' …")
+                logger.info(f"[Embedder] Creating vector index '{_INTERFACE_INDEX}' …")
                 session.run(
                     f"""
                     CREATE VECTOR INDEX {_INTERFACE_INDEX} IF NOT EXISTS
@@ -100,7 +103,7 @@ class NodeEmbedder:
                     }}
                     """
                 )
-                print(f"[Embedder] Index '{_INTERFACE_INDEX}' created.")
+                logger.info(f"[Embedder] Index '{_INTERFACE_INDEX}' created.")
 
     def _embed_label(self, driver: Driver, label: str, index_name: str) -> None:
         """Fetch all nodes of a given label, encode their descriptions, write back."""
@@ -111,10 +114,10 @@ class NodeEmbedder:
             ).data()
 
         if not rows:
-            print(f"[Embedder] No {label} nodes with descriptions found — skipping.")
+            logger.info(f"[Embedder] No {label} nodes with descriptions found — skipping.")
             return
 
-        print(f"[Embedder] Encoding {len(rows)} {label} nodes …")
+        logger.info(f"[Embedder] Encoding {len(rows)} {label} nodes …")
         texts = [row["description"] for row in rows]
 
         # Batch encode for efficiency
@@ -139,7 +142,7 @@ class NodeEmbedder:
                     """,
                     params=params,
                 )
-                print(f"[Embedder]   Wrote batch {start // batch_size + 1} / "
+                logger.info(f"[Embedder]   Wrote batch {start // batch_size + 1} / "
                       f"{(len(rows) + batch_size - 1) // batch_size}")
 
-        print(f"[Embedder] ✅ All {label} embeddings stored.")
+        logger.info(f"[Embedder] ✅ All {label} embeddings stored.")
