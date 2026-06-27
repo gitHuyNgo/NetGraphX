@@ -28,14 +28,16 @@ IF NOT EXIST ".env" (
 
 echo.
 echo [2] Starting Flask webhook server (port %WEBHOOK_PORT% or 5001)...
-start "NetGraphX Webhook Server" cmd /k "python -m src.webhook.server"
+echo [2] Starting Flask webhook server (port %WEBHOOK_PORT% or 5001)...
+start "NetGraphX Webhook Server" cmd /k "set PYTHONPATH=. && .venv\Scripts\python -m src.api.webhook.server"
 
 REM Small delay to let Flask start first
 timeout /t 2 /nobreak >nul
 
 echo.
 echo [3] Starting Streamlit dashboard (port 8501)...
-start "NetGraphX Dashboard" cmd /k "streamlit run app.py --server.port 8501"
+echo [3] Starting Streamlit dashboard (port 8501)...
+start "NetGraphX Dashboard" cmd /k "set PYTHONPATH=. && .venv\Scripts\streamlit run src\ui\app.py --server.port 8501"
 
 echo.
 echo ==================================================

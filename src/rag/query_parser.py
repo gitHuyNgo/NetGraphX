@@ -32,9 +32,12 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
+import logging
 from typing import List, Optional
 
 from config.settings import llm_config
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -152,8 +155,8 @@ class MultiIntentQueryParser:
                 ],
             )
             raw_text = response.choices[0].message.content.strip()
-        except Exception as exc:
-            print(f"[QueryParser] LLM call failed: {exc}")
+        except Exception as exc:  # Exception used here due to lazy loading of openai
+            logger.error(f"[QueryParser] LLM call failed: {exc}")
             return self._fallback_general(user_query)
 
         try:
@@ -171,7 +174,7 @@ class MultiIntentQueryParser:
                 return self._fallback_general(user_query)
             return ParsedQuery(intents=intents, raw_response=raw_text)
         except (json.JSONDecodeError, KeyError, TypeError) as exc:
-            print(f"[QueryParser] Failed to parse LLM JSON output: {exc}\nRaw: {raw_text}")
+            logger.error(f"[QueryParser] Failed to parse LLM JSON output: {exc}\nRaw: {raw_text}")
             return self._fallback_general(user_query)
 
     # ------------------------------------------------------------------

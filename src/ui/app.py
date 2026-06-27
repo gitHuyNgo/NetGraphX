@@ -30,21 +30,24 @@ from typing import Any, Dict, List, Optional
 import requests
 import streamlit as st
 import streamlit.components.v1 as components
-from neo4j import GraphDatabase
+import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
+from neo4j import GraphDatabase
 from config.settings import auth_config, neo4j_config, webhook_config
-from src.auth.users import authenticate, get_role, list_users
+from src.core.auth.users import authenticate, get_role, list_users
 from src.engine.graph_builder import (
     _LAYER_LABELS,
     _NODE_COLORS,
     _assign_layer,
-    build_vis_html,
 )
+from src.ui.vis_component.renderer import build_vis_html
 from src.rag.embedder import NodeEmbedder
 from src.rag.query_parser import MultiIntentQueryParser
 from src.rag.retriever import HybridRetriever
 from src.rag.synthesizer import LLMSynthesizer
-from src.webhook.state import get_status as get_webhook_status
+from src.api.webhook.state import get_status as get_webhook_status
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Page config  (must be first Streamlit call)
@@ -250,7 +253,9 @@ def get_synthesizer():
 # ─────────────────────────────────────────────────────────────────────────────
 # Topology data loader
 # ─────────────────────────────────────────────────────────────────────────────
-_TOPO_DATA_FILE = "topology_data.json"
+from pathlib import Path
+_TOPO_DATA_FILE = str(Path(__file__).parent.parent.parent / "data" / "storage" / "topology_data.json")
+_META_FILE      = str(Path(__file__).parent.parent.parent / "data" / "storage" / "dominant_meta.pkl")
 
 
 @st.cache_data(ttl=30)
@@ -259,6 +264,18 @@ def load_topology_data() -> Optional[Dict]:
     if os.path.exists(_TOPO_DATA_FILE):
         with open(_TOPO_DATA_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
+    return None
+
+
+@st.cache_data(ttl=30)
+def load_model_health() -> Optional[Dict]:
+    """Load dominant_meta.pkl and return training metrics dict (30-second TTL)."""
+    if os.path.exists(_META_FILE):
+        try:
+            import joblib
+            return joblib.load(_META_FILE)
+        except Exception:
+            return None
     return None
 
 
@@ -405,19 +422,42 @@ def _render_sidebar(topo: Optional[Dict]) -> Dict:
         # ── Search Nodes ───────────────────────────────────────────────────
         st.markdown("<div class='section-hdr'>Search & Inspect</div>", unsafe_allow_html=True)
 
-        device_names = ["— None —"] + sorted(
-            [n["id"] for n in topo["nodes"]] if topo else []
+        # Site filter dropdown
+        all_sites = sorted({
+            n.get("_site", "") or ""
+            for n in (topo["nodes"] if topo else [])
+            if n.get("_site")
+        })
+        site_options = ["All Sites"] + all_sites
+        filters["site"] = st.selectbox(
+            "Filter by Site",
+            site_options,
+            key="site_select",
         )
-        
+        selected_site = filters["site"]
+
+        # Device picker (narrowed to chosen site)
+        if topo:
+            if selected_site == "All Sites":
+                eligible = [n["id"] for n in topo["nodes"]]
+            else:
+                eligible = [
+                    n["id"] for n in topo["nodes"]
+                    if (n.get("_site") or "") == selected_site
+                ]
+        else:
+            eligible = []
+        device_names = ["— None —"] + sorted(eligible)
+
         selected_idx = 0
         if st.session_state.get("selected_device") in device_names:
             selected_idx = device_names.index(st.session_state.get("selected_device"))
 
         picked = st.selectbox(
             "Inspect Device", device_names, index=selected_idx,
-            label_visibility="collapsed"
+            label_visibility="collapsed",
         )
-        
+
         # Manually sync the selectbox to the session state
         if picked != "— None —" and picked != st.session_state.get("selected_device"):
             st.session_state["selected_device"] = picked
@@ -446,6 +486,8 @@ def _render_sidebar(topo: Optional[Dict]) -> Dict:
 
         # ── Admin-only sections ────────────────────────────────────────────
         if role == "admin":
+            st.markdown("<hr>", unsafe_allow_html=True)
+            _render_ai_health_panel()
             st.markdown("<hr>", unsafe_allow_html=True)
             _render_rules_editor()
             st.markdown("<hr>", unsafe_allow_html=True)
@@ -511,7 +553,7 @@ def _trigger_done(force: bool = False):
         else:
             st.error(f"❌  {data.get('error', 'Unknown error.')}")
     except requests.ConnectionError:
-        st.error("❌  Webhook server unreachable. Start it with `python -m src.webhook.server`.")
+        st.error("❌  Webhook server unreachable. Start it with `python -m src.api.webhook.server`.")
     except Exception as exc:
         st.error(f"❌  {exc}")
 
@@ -537,6 +579,119 @@ def _render_user_list():
                 unsafe_allow_html=True,
             )
         st.caption("Edit `config/users.yaml` to manage users.")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ── AI MODEL HEALTH PANEL ────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+def _render_ai_health_panel():
+    """Admin-only sidebar panel showing live DOMINANT model training metrics."""
+    meta = load_model_health()
+
+    st.markdown("<div class='section-hdr'>🤖 AI Model Health</div>", unsafe_allow_html=True)
+
+    if meta is None:
+        st.markdown(
+            "<div style='font-size:11.5px; color:#8e99aa; padding:6px 0;'>"
+            "No trained model found. Run <code>train.py</code> to generate one.</div>",
+            unsafe_allow_html=True,
+        )
+        return
+
+    pr_auc       = meta.get('pr_auc', 0.0)
+    roc_auc      = meta.get('roc_auc', 0.0)
+    best_alpha   = meta.get('alpha', '—')
+    n_nodes      = meta.get('n_nodes', '—')
+    n_anomalies  = meta.get('n_anomalies', '—')
+    contamination = meta.get('contamination_rate', 0.0)
+    n_wl         = meta.get('n_whitelisted', 0)
+    tp           = meta.get('tp', '—')
+    fp           = meta.get('fp', '—')
+    prec_k       = meta.get('precision_at_k', 0.0)
+    recall_k     = meta.get('recall_at_top5pct', 0.0)
+    trained_at   = meta.get('trained_at', '')
+
+    # Parse timestamp
+    trained_str = '—'
+    if trained_at:
+        try:
+            from datetime import datetime, timezone
+            dt = datetime.fromisoformat(trained_at)
+            trained_str = dt.strftime('%Y-%m-%d %H:%M UTC')
+        except Exception:
+            trained_str = trained_at
+
+    # ── PR-AUC Gauge ────────────────────────────────────────────────────
+    random_floor = contamination if contamination else 0.02
+    # Normalise to [0, 1] relative to realistic ceiling of 0.65
+    bar_pct = min(pr_auc / 0.65, 1.0)
+    bar_color = (
+        '#e53935' if pr_auc < random_floor * 2 else
+        '#f9a825' if pr_auc < random_floor * 5 else
+        '#43a047'
+    )
+
+    st.markdown(
+        f"""
+        <div style='background:#f5f6fa; border:1px solid #dde1e7; border-radius:9px;
+                    padding:10px 12px; margin-bottom:8px;'>
+          <div style='font-size:10.5px; color:#8e99aa; font-weight:700;
+                      text-transform:uppercase; letter-spacing:0.6px;
+                      margin-bottom:6px;'>PR-AUC Score</div>
+          <div style='font-size:1.6rem; font-weight:800; color:{bar_color};
+                      line-height:1.1;'>{pr_auc:.4f}</div>
+          <div style='background:#e0e0e0; border-radius:4px;
+                      height:6px; margin:6px 0 4px;'>
+            <div style='background:{bar_color}; width:{bar_pct*100:.1f}%;
+                        height:6px; border-radius:4px; transition:width 0.4s;'></div>
+          </div>
+          <div style='font-size:10px; color:#8e99aa;'>
+            Random floor: {random_floor:.3f} &nbsp;|&nbsp;
+            Lift: <b style='color:{bar_color};'>{pr_auc/random_floor:.1f}×</b>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # ── Key metrics grid ─────────────────────────────────────────────────
+    rows = [
+        ("Best α (grid search)",  f"{best_alpha}"),
+        ("ROC-AUC",               f"{roc_auc:.4f}"),
+        ("Contamination rate",    f"{contamination*100:.1f}%"),
+        ("Graph size",            f"{n_nodes} nodes"),
+        ("Ground-truth anomalies",f"{n_anomalies}"),
+        ("Whitelisted (masked)",  f"{n_wl}"),
+        ("TP caught @ Top-5%",    f"{tp}  (recall {recall_k:.0%})"),
+        ("FP flagged @ Top-5%",   f"{fp}  (prec {prec_k:.0%})"),
+        ("Last trained",          trained_str),
+    ]
+    rows_html = "".join(
+        f"<div class='device-field'>"
+        f"<span class='lbl'>{lbl}</span>"
+        f"<span class='val'>{val}</span></div>"
+        for lbl, val in rows
+    )
+    st.markdown(f"<div class='device-card'>{rows_html}</div>", unsafe_allow_html=True)
+
+    # ── Alpha grid search results table ─────────────────────────────────
+    grid = meta.get('grid_search_results')
+    if grid:
+        with st.expander("📊 Alpha Grid Search Results", expanded=False):
+            gdf = (
+                __import__('pandas').DataFrame(grid)
+                .rename(columns={'alpha': 'α', 'pr_auc': 'PR-AUC', 'roc_auc': 'ROC-AUC'})
+                .sort_values('PR-AUC', ascending=False)
+                .reset_index(drop=True)
+            )
+            # Bold best row
+            best_row = gdf.iloc[0]
+            st.dataframe(
+                gdf.style.format({'α': '{:.1f}', 'PR-AUC': '{:.4f}', 'ROC-AUC': '{:.4f}'})
+                         .highlight_max(subset=['PR-AUC'], color='#c8e6c9'),
+                use_container_width=True,
+                hide_index=True,
+            )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -595,6 +750,8 @@ def _apply_filters(topo: Dict, filters: Dict) -> tuple:
         allowed_ids = None  # no restriction
 
     # ── Filter nodes ──────────────────────────────────────────────────
+    site_filter = filters.get("site", "All Sites")
+
     filtered_nodes = []
     kept_ids = set()
     for n in topo["nodes"]:
@@ -604,6 +761,9 @@ def _apply_filters(topo: Dict, filters: Dict) -> tuple:
         if not _checkbox_ok(layer):
             continue
         if allowed_ids is not None and n["id"] not in allowed_ids:
+            continue
+        # Site filter guard
+        if site_filter != "All Sites" and (n.get("_site") or "") != site_filter:
             continue
 
         node = dict(n)
@@ -615,6 +775,21 @@ def _apply_filters(topo: Dict, filters: Dict) -> tuple:
                 "border": "#000",
             }
             node["label"] = n["id"]  # remove [SPOF ⚠] suffix
+
+        if n.get("_is_predicted_rogue"):
+            if not n.get("_human_reviewed"):
+                node["color"] = {
+                    "background": "#ff1744", # bright red
+                    "border": "#ff1744",
+                    "highlight": {"background": "#ffffff", "border": "#ff1744"}
+                }
+                node["label"] = n["id"] + "\n[? ROGUE]"
+            elif n.get("_is_confirmed_rogue"):
+                node["color"] = {
+                    "background": "#b71c1c", # dark red
+                    "border": "#000000"
+                }
+                node["label"] = n["id"] + "\n[ROGUE]"
 
         filtered_nodes.append(node)
         kept_ids.add(n["id"])
@@ -643,7 +818,7 @@ def _render_graph(topo: Optional[Dict], filters: Dict):
     """Render the vis.js graph inline with current filters applied."""
     if not topo:
         st.warning(
-            "No topology data found. Run `python -m src.main` to generate `topology_data.json`, "
+            "No topology data found. Run `python main.py --run-engine` to generate `topology_data.json`, "
             "or click **Done — Sync Now** if webhook changes are pending."
         )
         return
@@ -723,6 +898,31 @@ def _render_metrics(topo: Optional[Dict]):
 # ─────────────────────────────────────────────────────────────────────────────
 # ── DEVICE DETAILS PANEL ──────────────────────────────────────────────────────
 # ─────────────────────────────────────────────────────────────────────────────
+
+def _update_rogue_status(node_id: str, is_confirmed: bool):
+    driver = get_neo4j_driver()
+    with driver.session() as session:
+        session.run(
+            """
+            MATCH (d:Device {name: $node_id})
+            SET d.is_confirmed_rogue = $is_confirmed,
+                d.human_reviewed = true
+            """,
+            node_id=node_id,
+            is_confirmed=is_confirmed
+        )
+    topo = load_topology_data()
+    if topo:
+        for n in topo.get("nodes", []):
+            if n["id"] == node_id:
+                n["_is_confirmed_rogue"] = is_confirmed
+                n["_human_reviewed"] = True
+                break
+        with open(_TOPO_DATA_FILE, "w", encoding="utf-8") as f:
+            json.dump(topo, f, ensure_ascii=False)
+    load_topology_data.clear()
+    st.rerun()
+
 def _render_device_details(topo: Optional[Dict]):
     hdr_col, vi_col = st.columns([0.75, 0.25])
     with hdr_col:
@@ -787,6 +987,20 @@ def _render_device_details(topo: Optional[Dict]):
         ("Rack",          node_data.get("_rack") or "—"),
         ("Connections",   str(len(connected_devices))),
     ]
+    
+    if node_data.get("_is_predicted_rogue"):
+        fields.append(("AI Prediction", "🚨 ROGUE DEVICE"))
+        fields.append(("Anomaly Score", f"{node_data.get('_anomaly_score', 0):.2f}"))
+        # Show topology violation reason if present
+        if node_data.get("_topology_violation"):
+            fields.append(("⚠️ Topo Violation", node_data.get("_violation_reason", "Illegal cross-layer connection")))
+        status = "Pending Review"
+        if node_data.get("_human_reviewed"):
+            if node_data.get("_is_confirmed_rogue"):
+                status = "✅ Confirmed Rogue"
+            else:
+                status = "❌ Rejected (Normal)"
+        fields.append(("Human Status", status))
 
     fields_html = "".join(
         f"<div class='device-field'>"
@@ -810,6 +1024,155 @@ def _render_device_details(topo: Optional[Dict]):
         """,
         unsafe_allow_html=True,
     )
+
+    if not node_data.get("_human_reviewed"):
+        st.markdown("<hr>", unsafe_allow_html=True)
+        st.markdown("<div style='font-size:12px; font-weight:700; color:#1a2535; margin-bottom:8px;'>Human In The Loop Verification</div>", unsafe_allow_html=True)
+        
+        if node_data.get("_is_predicted_rogue"):
+            c1, c2 = st.columns(2)
+            with c1:
+                if st.button("🚨 Confirm Rogue", key="btn_confirm_rogue", type="primary", use_container_width=True):
+                    _update_rogue_status(selected, True)
+            with c2:
+                if st.button("✅ White-list / False Positive", key="btn_reject_rogue", use_container_width=True):
+                    _update_rogue_status(selected, False)
+        else:
+            if st.button("🚨 Flag as Rogue (Missed Anomaly)", key="btn_mark_rogue_fn", type="primary", use_container_width=True):
+                _update_rogue_status(selected, True)
+
+    # ── Active Learning Retrain Panel ─────────────────────────────────────
+    has_feedback = any(n.get("_human_reviewed") for n in topo.get("nodes", []))
+    whitelisted_count = sum(
+        1 for n in topo.get("nodes", [])
+        if n.get("_human_reviewed") and not n.get("_is_confirmed_rogue")
+    )
+    confirmed_count = sum(
+        1 for n in topo.get("nodes", [])
+        if n.get("_human_reviewed") and n.get("_is_confirmed_rogue")
+    )
+
+    st.markdown("<hr>", unsafe_allow_html=True)
+    st.markdown(
+        "<div style='font-size:12px; font-weight:700; color:#1a2535; margin-bottom:8px;'>"
+        "🔁 Active Learning Retrain"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+    # Feedback summary badges
+    badge_html = (
+        f"<div style='display:flex; gap:8px; margin-bottom:10px;'>"
+        f"<span style='background:#e8f5e9; border:1px solid #388e3c; color:#1b5e20;"
+        f"  border-radius:6px; padding:2px 8px; font-size:10.5px; font-weight:700;'>"
+        f"✅ {whitelisted_count} Whitelisted</span>"
+        f"<span style='background:#ffebee; border:1px solid #c62828; color:#b71c1c;"
+        f"  border-radius:6px; padding:2px 8px; font-size:10.5px; font-weight:700;'>"
+        f"🚨 {confirmed_count} Confirmed Rogue</span>"
+        f"</div>"
+    )
+    st.markdown(badge_html, unsafe_allow_html=True)
+
+    # Show current model PR-AUC as a before-value reference
+    meta_before = load_model_health()
+    pr_before = meta_before.get('pr_auc', None) if meta_before else None
+    alpha_before = meta_before.get('alpha', None) if meta_before else None
+    if pr_before is not None:
+        st.markdown(
+            f"<div style='font-size:11px; color:#5a6474; margin-bottom:10px;'>"
+            f"Current model: <b>PR-AUC = {pr_before:.4f}</b>&nbsp;&nbsp;"
+            f"α = <b>{alpha_before}</b></div>",
+            unsafe_allow_html=True,
+        )
+
+    retrain_help = (
+        "Retrains the GNN with your human feedback applied as a loss mask. "
+        "Whitelisted devices are excluded from training loss so the model "
+        "stops flagging them. Alpha is re-optimized via grid search."
+    )
+    if not has_feedback:
+        st.caption("💡 Review at least one AI prediction above to enable retraining.")
+
+    retrain_btn = st.button(
+        "🔄 Retrain Model with Feedback",
+        type="primary",
+        use_container_width=True,
+        disabled=not has_feedback,
+        help=retrain_help,
+    )
+
+    if retrain_btn:
+        import subprocess as _sp
+        import sys as _sys
+        import time as _time
+
+        python_exe = _sys.executable
+        log_placeholder = st.empty()
+        log_lines = []
+
+        def _run_step(label: str, cmd: str):
+            log_lines.append(f"\n▶ {label}...")
+            log_placeholder.code("\n".join(log_lines), language="") 
+            proc = _sp.Popen(
+                cmd, shell=True,
+                stdout=_sp.PIPE, stderr=_sp.STDOUT,
+                text=True, encoding="utf-8", errors="replace"
+            )
+            for line in proc.stdout:
+                stripped = line.rstrip()
+                if stripped:
+                    log_lines.append(f"  {stripped}")
+                    # Keep last 40 lines visible to avoid overflow
+                    visible = log_lines[-40:]
+                    log_placeholder.code("\n".join(visible), language="")
+            proc.wait()
+            if proc.returncode != 0:
+                raise RuntimeError(f"{label} failed (exit {proc.returncode})")
+            log_lines.append(f"  ✓ {label} complete.")
+            log_placeholder.code("\n".join(log_lines[-40:]), language="")
+
+        try:
+            env_prefix = f'cmd /c "set PYTHONPATH=. && "{python_exe}"'
+            _run_step("Extracting features",
+                      f'{env_prefix} src/data_pipeline/extract_features.py"')
+            _run_step("Training DOMINANT (with alpha grid search)",
+                      f'{env_prefix} src/data_pipeline/train.py"')
+            _run_step("Running inference & updating graph",
+                      f'{env_prefix} src/data_pipeline/predict.py"')
+
+            # Reload model health metrics
+            load_model_health.clear()
+            load_topology_data.clear()
+            meta_after = load_model_health()
+            pr_after   = meta_after.get('pr_auc', None) if meta_after else None
+            alpha_after = meta_after.get('alpha', None) if meta_after else None
+
+            log_lines.append("\n" + "─" * 50)
+            log_lines.append("  RETRAIN COMPLETE")
+            if pr_before is not None and pr_after is not None:
+                delta = pr_after - pr_before
+                sign  = '+' if delta >= 0 else ''
+                log_lines.append(f"  PR-AUC: {pr_before:.4f} → {pr_after:.4f}  ({sign}{delta:.4f})")
+                log_lines.append(f"  Best α: {alpha_before} → {alpha_after}")
+            log_lines.append("─" * 50)
+            log_placeholder.code("\n".join(log_lines[-40:]), language="")
+
+            if pr_after is not None and pr_before is not None:
+                delta = pr_after - pr_before
+                if delta >= 0:
+                    st.success(f"✅ Retrain complete! PR-AUC improved by +{delta:.4f} → {pr_after:.4f}")
+                else:
+                    st.warning(f"⚠️ Retrain complete. PR-AUC changed by {delta:.4f} → {pr_after:.4f}")
+            else:
+                st.success("✅ Retrain complete! Refresh the page to see updated predictions.")
+
+            _time.sleep(1.5)
+            st.rerun()
+
+        except Exception as e:
+            st.error(f"❌ Retraining failed: {e}")
+
+
 
     if connected_devices:
         st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)

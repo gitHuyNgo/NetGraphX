@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 from dataclasses import dataclass
 from dotenv import load_dotenv
 
@@ -15,7 +16,7 @@ def get_env(key: str, default=None, required: bool = False):
 
 @dataclass(frozen=True)
 class NetBoxConfig:
-    NETBOX_URL: str = get_env("NETBOX_URL", "http://localhost:8000")
+    NETBOX_URL: str = get_env("NETBOX_URL", "http://localhost:8081")
     NETBOX_API_TOKEN: str = get_env("NETBOX_API_TOKEN", required=True)
 
 
@@ -47,7 +48,7 @@ class WebhookConfig:
     # Minutes to wait since last NetBox change before triggering auto-sync.
     # Override in .env; do NOT hardcode this value.
     WEBHOOK_DEBOUNCE_MINUTES: int = int(get_env("WEBHOOK_DEBOUNCE_MINUTES", "10"))
-    WEBHOOK_STATE_FILE: str = get_env("WEBHOOK_STATE_FILE", "webhook_state.json")
+    WEBHOOK_STATE_FILE: str = get_env("WEBHOOK_STATE_FILE", str(Path(__file__).parent.parent / "data" / "storage" / "webhook_state.json"))
 
 
 @dataclass(frozen=True)

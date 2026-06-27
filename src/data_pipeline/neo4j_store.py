@@ -1,5 +1,7 @@
 from typing import Any, Dict, List, Optional
 
+import logging
+
 import networkx as nx
 from neo4j import GraphDatabase
 
@@ -12,121 +14,14 @@ from src.engine.rule_audit import (
     devices_with_compliance_status,
     load_audit_config,
     loop_participating_interfaces,
+    build_device_description,
+    build_interface_description,
 )
-from src.models.topology import TopologyData
+from src.core.topology import TopologyData
 
 TRUNK_MODES = frozenset({"tagged", "tagged-all", "q-in-q"})
+logger = logging.getLogger(__name__)
 
-
-# ---------------------------------------------------------------------------
-# Vietnamese description builders (Task 1)
-# ---------------------------------------------------------------------------
-
-def _build_device_description(
-    name: str,
-    role: Optional[str],
-    vendor: Optional[str],
-    model: Optional[str],
-    site: Optional[str],
-    rack: Optional[str],
-    primary_ip: Optional[str],
-    status: Optional[str],
-    is_spof: bool = False,
-    is_loop: bool = False,
-    has_topology_violation: bool = False,
-    topology_violation_reason: Optional[str] = None,
-) -> str:
-    """
-    Builds a rich Vietnamese natural-language description for a Device node.
-    Encodes all structural and audit fields into a single searchable text blob.
-    """
-    role_str = role or "thiết bị mạng không xác định"
-    vendor_str = vendor or "hãng không xác định"
-    model_str = model or "không rõ model"
-    site_str = site or "vị trí không xác định"
-    ip_str = primary_ip or "chưa gán"
-
-    rack_part = f", tủ rack {rack}" if rack else ""
-    status_map = {
-        "active": "đang hoạt động bình thường",
-        "planned": "đang trong giai đoạn lên kế hoạch",
-        "staged": "đã được triển khai, chờ kích hoạt",
-        "failed": "đã gặp sự cố và ngừng hoạt động",
-        "decommissioning": "đang trong quá trình gỡ bỏ",
-        "inventory": "đang được lưu kho",
-        "offline": "đang offline",
-    }
-    status_detail = status_map.get(status or "", f"trạng thái: {status or 'không rõ'}")
-
-    # Build error summary section
-    errors = []
-    if is_spof:
-        errors.append("SPOF (Điểm thất bại đơn lẻ): thiết bị này là nút cổ chai quan trọng, nếu gặp sự cố toàn bộ kết nối phụ thuộc sẽ bị gián đoạn")
-    if is_loop:
-        errors.append("Vòng lặp mạng: thiết bị tham gia vào một vòng lặp L2 bất hợp lệ có thể gây broadcast storm")
-    if has_topology_violation:
-        reason_str = topology_violation_reason or "vi phạm cấu trúc mạng"
-        errors.append(f"Vi phạm cấu trúc: {reason_str}")
-
-    if errors:
-        error_summary = "Các lỗi đang tồn tại: " + "; ".join(errors) + "."
-    else:
-        error_summary = "Thiết bị an toàn, không phát hiện lỗi cấu trúc."
-
-    return (
-        f"Thiết bị {name} là một {role_str} thuộc hãng {vendor_str}, model {model_str}. "
-        f"Vị trí: {site_str}{rack_part}. "
-        f"Địa chỉ IP chính: {ip_str}. "
-        f"Trạng thái hiện tại: {status_detail}. "
-        f"{error_summary}"
-    )
-
-
-def _build_interface_description(
-    name: str,
-    device_name: str,
-    mode: Optional[str],
-    untagged_vlan: Optional[Dict[str, Any]],
-    tagged_vlans: Optional[List[Dict[str, Any]]],
-    is_loop: bool = False,
-    has_vlan_mismatch: bool = False,
-) -> str:
-    """
-    Builds a Vietnamese natural-language description for an Interface node.
-    """
-    mode_map = {
-        "access": "access (kết nối thiết bị đầu cuối, mang một VLAN duy nhất)",
-        "tagged": "trunk (mang nhiều VLAN có gán nhãn)",
-        "tagged-all": "trunk toàn bộ VLAN",
-        "q-in-q": "Q-in-Q (VLAN lồng nhau)",
-    }
-    mode_str = mode_map.get(mode or "", f"chế độ {mode or 'không xác định'}")
-
-    vlan_parts = []
-    if untagged_vlan:
-        vid = untagged_vlan.get("vid")
-        vname = untagged_vlan.get("name", "")
-        vlan_parts.append(f"VLAN không gán nhãn: {vid} ({vname})")
-    if tagged_vlans:
-        vids = ", ".join(str(v.get("vid")) for v in tagged_vlans if v.get("vid"))
-        vlan_parts.append(f"VLAN gán nhãn: {vids}")
-
-    vlan_str = "; ".join(vlan_parts) if vlan_parts else "chưa gán VLAN"
-
-    errors = []
-    if is_loop:
-        errors.append("Tham gia vòng lặp mạng L2")
-    if has_vlan_mismatch:
-        errors.append("Có sự không khớp VLAN với cổng đầu đối diện")
-
-    error_str = " | Lỗi: " + "; ".join(errors) if errors else " | Không có lỗi."
-
-    return (
-        f"Cổng {name} thuộc thiết bị {device_name}. "
-        f"Chế độ hoạt động: {mode_str}. "
-        f"{vlan_str}."
-        f"{error_str}"
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -175,11 +70,11 @@ class Neo4jTopologyStore:
             from src.rag.embedder import NodeEmbedder
             embedder = NodeEmbedder()
             embedder.embed_all_nodes(self._driver)
-            print("[Neo4j] Vector index built and embeddings stored successfully.")
+            logger.info("[Neo4j] Vector index built and embeddings stored successfully.")
         except ImportError as exc:
-            print(f"[Neo4j] Embedder not available (sentence-transformers not installed?): {exc}")
+            logger.error(f"[Neo4j] Embedder not available (sentence-transformers not installed?): {exc}")
         except Exception as exc:
-            print(f"[Neo4j] Vector index build failed: {exc}")
+            logger.error(f"[Neo4j] Vector index build failed: {exc}")
 
     # -----------------------------------------------------------------------
     # Write helpers
@@ -194,7 +89,7 @@ class Neo4jTopologyStore:
 
         for device in topology.devices:
             # Build initial description (no audit flags yet — they come later)
-            description = _build_device_description(
+            description = build_device_description(
                 name=device.get("name", ""),
                 role=device.get("role"),
                 vendor=device.get("vendor"),
@@ -254,7 +149,7 @@ class Neo4jTopologyStore:
             dev = device_by_id.get(dev_id, {})
             device_name = dev.get("name") or interface.get("device_name") or "không rõ"
 
-            iface_description = _build_interface_description(
+            iface_description = build_interface_description(
                 name=interface.get("name", ""),
                 device_name=device_name,
                 mode=interface.get("mode"),
@@ -350,44 +245,9 @@ class Neo4jTopologyStore:
                 tagged=is_trunk,
             )
 
+
     @staticmethod
-    def _write_compliance(
-        tx,
-        graph: nx.Graph,
-        interfaces_list: List[Dict[str, Any]],
-        loop_result: AuditResult,
-        spof_result: AuditResult,
-        star_result: AuditResult,
-        config_path: Optional[str],
-    ) -> None:
-        audit_config = load_audit_config(config_path)
-        loop_status = audit_config["network_loop"]["compliance_status"]["fail"]
-        spof_status = audit_config["single_point_of_failure"]["compliance_status"]["fail"]
-        vlan_rule = audit_config["vlan_mismatch"]
-        link_template = vlan_rule["link_knowledge_template"]
-
-        # Reset all flags
-        tx.run(
-            """
-            MATCH (d:Device)
-            SET d.is_SPOF = false,
-                d.is_loop = false,
-                d.has_topology_violation = false,
-                d.topology_violation_reason = null
-            """
-        )
-        tx.run("MATCH (i:Interface) SET i.is_loop = false, i.has_vlan_mismatch = false")
-        tx.run(
-            """
-            MATCH ()-[link:CONNECTED_TO]->()
-            SET link.is_loop = false,
-                link.loop_id = null,
-                link.has_vlan_mismatch = false,
-                link.vlan_mismatch_detail = null
-            """
-        )
-
-        # --- Apply SPOF flags ---
+    def _apply_spof_flags(tx, spof_result: AuditResult, spof_status: str) -> None:
         spof_device_names = devices_with_compliance_status(spof_result, spof_status)
         if spof_device_names:
             tx.run(
@@ -399,7 +259,8 @@ class Neo4jTopologyStore:
                 device_names=spof_device_names,
             )
 
-        # --- Apply loop flags ---
+    @staticmethod
+    def _apply_loop_flags(tx, graph, config_path: str, loop_result: AuditResult, loop_status: str) -> dict:
         loop_devices = devices_with_compliance_status(loop_result, loop_status)
         loop_context = collect_loop_edges(graph, config_path)
         loop_id = loop_context["loop_id"]
@@ -442,8 +303,10 @@ class Neo4jTopologyStore:
                     cable_id=edge["cable_id"],
                     loop_id=loop_id,
                 )
+        return loop_context
 
-        # --- Apply topology violation flags ---
+    @staticmethod
+    def _apply_topology_violation_flags(tx, star_result: AuditResult) -> None:
         topology_violations = device_topology_violations(star_result)
         if topology_violations:
             tx.run(
@@ -459,7 +322,8 @@ class Neo4jTopologyStore:
                 ],
             )
 
-        # --- Apply VLAN mismatch flags to interfaces and links ---
+    @staticmethod
+    def _apply_vlan_mismatch_flags(tx, graph, interfaces_list: list, link_template: str) -> set:
         mismatch_interface_names = set()
         for mismatch in collect_vlan_mismatch_edges(graph, interfaces_list):
             detail = link_template.format(**mismatch)
@@ -494,48 +358,106 @@ class Neo4jTopologyStore:
                 iface_name=iface_name,
                 dev_name=dev_name,
             )
+        return mismatch_interface_names
 
-        # -------------------------------------------------------------------
-        # Task 1: Rebuild Vietnamese descriptions now that all flags are set.
-        # We read back updated flags from Neo4j and regenerate the description.
-        # -------------------------------------------------------------------
+    @staticmethod
+    def _rebuild_descriptions_with_python(tx, interfaces_list: list, loop_interfaces: list, mismatch_interface_names: set) -> None:
+        devices_data = tx.run(
+            """
+            MATCH (d:Device)
+            RETURN d.name as name, d.role as role, d.vendor as vendor, d.model as model,
+                   d.site as site, d.rack as rack, d.primary_ip as primary_ip, d.status as status,
+                   d.is_SPOF as is_spof, d.is_loop as is_loop, d.has_topology_violation as has_violation,
+                   d.topology_violation_reason as reason
+            """
+        ).data()
+
+        for d in devices_data:
+            desc = build_device_description(
+                name=d["name"],
+                role=d["role"],
+                vendor=d["vendor"],
+                model=d["model"],
+                site=d["site"],
+                rack=d["rack"],
+                primary_ip=d["primary_ip"],
+                status=d["status"],
+                is_spof=bool(d.get("is_spof")),
+                is_loop=bool(d.get("is_loop")),
+                has_topology_violation=bool(d.get("has_violation")),
+                topology_violation_reason=d.get("reason")
+            )
+            tx.run("MATCH (d:Device {name: $name}) SET d.description = $desc", name=d["name"], desc=desc)
+
+        loop_ifaces_set = {(ref["interface_name"], ref["device_name"]) for ref in loop_interfaces}
+        for interface in interfaces_list:
+            iface_name = interface.get("name", "")
+            dev_name = interface.get("device_name", "không rõ")
+            iface_key = (iface_name, dev_name)
+
+            is_loop_iface = iface_key in loop_ifaces_set
+            has_mismatch_iface = iface_key in mismatch_interface_names
+
+            desc = build_interface_description(
+                name=iface_name,
+                device_name=dev_name,
+                mode=interface.get("mode"),
+                untagged_vlan=interface.get("untagged_vlan"),
+                tagged_vlans=interface.get("tagged_vlans"),
+                is_loop=is_loop_iface,
+                has_vlan_mismatch=has_mismatch_iface,
+            )
+            tx.run(
+                """
+                MATCH (i:Interface {name: $iface_name})-[:BELONGS_TO]->(d:Device {name: $dev_name})
+                SET i.description = $desc
+                """,
+                iface_name=iface_name,
+                dev_name=dev_name,
+                desc=desc
+            )
+
+    @staticmethod
+    def _write_compliance(
+        tx,
+        graph: nx.Graph,
+        interfaces_list: List[Dict[str, Any]],
+        loop_result: AuditResult,
+        spof_result: AuditResult,
+        star_result: AuditResult,
+        config_path: Optional[str],
+    ) -> None:
+        audit_config = load_audit_config(config_path)
+        loop_status = audit_config["network_loop"]["compliance_status"]["fail"]
+        spof_status = audit_config["single_point_of_failure"]["compliance_status"]["fail"]
+        vlan_rule = audit_config["vlan_mismatch"]
+        link_template = vlan_rule["link_knowledge_template"]
+
+        # Reset all flags
         tx.run(
             """
             MATCH (d:Device)
-            SET d.description = 
-                'Thiết bị ' + d.name + 
-                ' là một ' + coalesce(d.role, 'thiết bị mạng') + 
-                ' thuộc hãng ' + coalesce(d.vendor, 'không rõ') + 
-                ', model ' + coalesce(d.model, 'không rõ') + '. ' +
-                'Vị trí: ' + coalesce(d.site, 'không xác định') + 
-                CASE WHEN d.rack IS NOT NULL THEN ', tủ rack ' + d.rack ELSE '' END + '. ' +
-                'Địa chỉ IP chính: ' + coalesce(d.primary_ip, 'chưa gán') + '. ' +
-                'Trạng thái: ' + coalesce(d.status, 'không rõ') + '. ' +
-                CASE 
-                    WHEN d.is_SPOF AND d.is_loop THEN 'Lỗi SPOF và vòng lặp mạng đang tồn tại.'
-                    WHEN d.is_SPOF THEN 'Lỗi SPOF: thiết bị là điểm thất bại đơn lẻ.'
-                    WHEN d.is_loop THEN 'Lỗi vòng lặp mạng L2 đang tồn tại.'
-                    ELSE 'Thiết bị an toàn, không phát hiện lỗi cấu trúc.'
-                END +
-                CASE 
-                    WHEN d.has_topology_violation THEN ' Vi phạm cấu trúc: ' + coalesce(d.topology_violation_reason, 'không rõ lý do') + '.'
-                    ELSE ''
-                END
+            SET d.is_SPOF = false,
+                d.is_loop = false,
+                d.has_topology_violation = false,
+                d.topology_violation_reason = null
+            """
+        )
+        tx.run("MATCH (i:Interface) SET i.is_loop = false, i.has_vlan_mismatch = false")
+        tx.run(
+            """
+            MATCH ()-[link:CONNECTED_TO]->()
+            SET link.is_loop = false,
+                link.loop_id = null,
+                link.has_vlan_mismatch = false,
+                link.vlan_mismatch_detail = null
             """
         )
 
-        # Rebuild interface descriptions with updated loop/mismatch flags
-        tx.run(
-            """
-            MATCH (i:Interface)-[:BELONGS_TO]->(d:Device)
-            SET i.description =
-                'Cổng ' + i.name + ' thuộc thiết bị ' + d.name + '. ' +
-                'Chế độ: ' + coalesce(i.mode, 'không xác định') + '. ' +
-                CASE 
-                    WHEN i.is_loop AND i.has_vlan_mismatch THEN 'Tham gia vòng lặp mạng. Không khớp VLAN.'
-                    WHEN i.is_loop THEN 'Tham gia vòng lặp mạng L2.'
-                    WHEN i.has_vlan_mismatch THEN 'Có sự không khớp VLAN với cổng đầu đối diện.'
-                    ELSE 'Cổng hoạt động bình thường.'
-                END
-            """
-        )
+        Neo4jTopologyStore._apply_spof_flags(tx, spof_result, spof_status)
+        loop_context = Neo4jTopologyStore._apply_loop_flags(tx, graph, config_path, loop_result, loop_status)
+        Neo4jTopologyStore._apply_topology_violation_flags(tx, star_result)
+        mismatch_interface_names = Neo4jTopologyStore._apply_vlan_mismatch_flags(tx, graph, interfaces_list, link_template)
+
+        loop_interfaces = loop_participating_interfaces(loop_context["edges"])
+        Neo4jTopologyStore._rebuild_descriptions_with_python(tx, interfaces_list, loop_interfaces, mismatch_interface_names)

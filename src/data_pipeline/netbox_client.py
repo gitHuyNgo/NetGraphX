@@ -1,7 +1,11 @@
 import pynetbox
+import logging
 from typing import Any, Dict, List, Optional
+import requests
 
 from config.settings import netbox_config
+
+logger = logging.getLogger(__name__)
 
 
 def _vlan_record(vlan_obj: Any) -> Optional[Dict[str, Any]]:
@@ -56,8 +60,8 @@ class NetBoxClient:
                 )
             return cleaned_devices
 
-        except Exception as exc:
-            print(f"[Error] Get error when getting device list:: {exc}")
+        except (pynetbox.core.query.RequestError, requests.exceptions.RequestException) as exc:
+            logger.error(f"[Error] Get error when getting device list:: {exc}")
             return []
 
     def fetch_all_cables(self) -> List[Dict[str, Any]]:
@@ -98,8 +102,8 @@ class NetBoxClient:
 
             return cleaned_cables
 
-        except Exception as exc:
-            print(f"[Error] Get error when getting cable list: {exc}")
+        except (pynetbox.core.query.RequestError, requests.exceptions.RequestException) as exc:
+            logger.error(f"[Error] Get error when getting cable list: {exc}")
             return []
 
     def fetch_all_interfaces_vlan(self) -> List[Dict[str, Any]]:
@@ -138,25 +142,25 @@ class NetBoxClient:
                 )
             return cleaned_interfaces
 
-        except Exception as exc:
-            print(f"[Error] Get error when getting interface list: {exc}")
+        except (pynetbox.core.query.RequestError, requests.exceptions.RequestException) as exc:
+            logger.error(f"[Error] Get error when getting interface list: {exc}")
             return []
 
 
 if __name__ == "__main__":
     client = NetBoxClient()
 
-    print("\n[1] Extracting Devices list...")
+    logger.info("\n[1] Extracting Devices list...")
     devices_data = client.fetch_all_devices()
-    print(f"Found {len(devices_data)} devices.")
+    logger.info(f"Found {len(devices_data)} devices.")
     if devices_data:
-        print("First device sample:", devices_data[0])
+        logger.info(f"First device sample: {devices_data[0]}")
 
-    print("\n[2] Extracting Cables list...")
+    logger.info("\n[2] Extracting Cables list...")
     cables_data = client.fetch_all_cables()
-    print(f"Found {len(cables_data)} cables.")
+    logger.info(f"Found {len(cables_data)} cables.")
     if cables_data:
-        print("First cable sample:", cables_data[0])
+        logger.info(f"First cable sample: {cables_data[0]}")
 
     print("\n[3] Extracting Interface/VLAN list...")
     interfaces_data = client.fetch_all_interfaces_vlan()

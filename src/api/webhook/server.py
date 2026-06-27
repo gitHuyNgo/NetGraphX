@@ -40,7 +40,7 @@ if sys.platform == 'win32':
 from flask import Flask, jsonify, request
 
 from config.settings import webhook_config
-from src.webhook import state as wh_state
+from src.api.webhook import state as wh_state
 
 app = Flask(__name__)
 

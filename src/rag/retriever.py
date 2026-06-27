@@ -13,12 +13,15 @@ All strategies return a unified RetrievalResult.
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from neo4j import Driver
 
 from src.rag.query_parser import ParsedIntent, ParsedQuery
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Result dataclass
@@ -177,7 +180,7 @@ class HybridRetriever:
     def _retrieve_audit(self, intent: ParsedIntent) -> RetrievalResult:
         target = (intent.target or "all").strip()
         if target not in _CYPHER_TEMPLATES:
-            print(f"[Retriever] Unknown scan_errors target '{target}' — falling back to 'all'.")
+            logger.info(f"[Retriever] Unknown scan_errors target '{target}' — falling back to 'all'.")
             target = "all"
 
         cypher = _CYPHER_TEMPLATES[target]

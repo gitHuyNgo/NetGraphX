@@ -20,6 +20,7 @@ Wires together all 5 tasks into a single end-to-end pipeline:
 
 from __future__ import annotations
 
+import logging
 from typing import List, Optional
 
 from neo4j import GraphDatabase
@@ -30,6 +31,9 @@ from src.rag.retriever import HybridRetriever, RetrievalResult
 from src.rag.synthesizer import LLMSynthesizer
 
 
+logger = logging.getLogger(__name__)
+
+
 class RAGPipeline:
     """
     End-to-end retrieval-augmented generation pipeline for NetGraphX.
@@ -37,7 +41,7 @@ class RAGPipeline:
     Usage:
         pipeline = RAGPipeline()
         answer = pipeline.query("Mạng có thiết bị SPOF nào không?")
-        print(answer)
+        logger.info(answer)
     """
 
     def __init__(self, load_embedder: bool = True) -> None:
@@ -47,7 +51,7 @@ class RAGPipeline:
                            vector search. Set False to skip (faster startup,
                            but 'general' intent falls back to no results).
         """
-        print("[Pipeline] Initialising RAG pipeline …")
+        logger.info("[Pipeline] Initialising RAG pipeline …")
 
         # Neo4j connection
         self._driver = GraphDatabase.driver(
@@ -61,15 +65,15 @@ class RAGPipeline:
             try:
                 from src.rag.embedder import NodeEmbedder
                 self._embedder = NodeEmbedder()
-            except Exception as exc:
-                print(f"[Pipeline] Embedder not loaded (vector search disabled): {exc}")
+            except ImportError as exc:
+                logger.error(f"[Pipeline] Embedder not loaded (vector search disabled): {exc}")
 
         # Core components
         self._parser = MultiIntentQueryParser()
         self._retriever = HybridRetriever(self._driver, embedder=self._embedder)
         self._synthesizer = LLMSynthesizer()
 
-        print("[Pipeline] ✅ Ready.")
+        logger.info("[Pipeline] ✅ Ready.")
 
     def query(self, user_query: str, verbose: bool = False) -> str:
         """
@@ -88,17 +92,17 @@ class RAGPipeline:
         # Step 1: Parse intents
         parsed: ParsedQuery = self._parser.parse(user_query)
         if verbose:
-            print(f"\n[Pipeline] Parsed intents:")
+            logger.info("\n[Pipeline] Parsed intents:")
             for intent in parsed.intents:
-                print(f"  type={intent.type} | target={intent.target} | query={intent.clean_query}")
+                logger.info(f"  type={intent.type} | target={intent.target} | query={intent.clean_query}")
 
         # Step 2: Retrieve context
         results: List[RetrievalResult] = self._retriever.retrieve(parsed)
         if verbose:
-            print(f"\n[Pipeline] Retrieval results:")
+            logger.info("\n[Pipeline] Retrieval results:")
             for r in results:
-                print(f"  [{r.strategy}] intent={r.intent.type}/{r.intent.target}")
-                print(f"  Context preview: {r.context_text[:200]}…")
+                logger.info(f"  [{r.strategy}] intent={r.intent.type}/{r.intent.target}")
+                logger.info(f"  Context preview: {r.context_text[:200]}…")
 
         # Step 3: Synthesise answer
         answer = self._synthesizer.synthesize(user_query, results)
