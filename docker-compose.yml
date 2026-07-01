@@ -92,6 +92,9 @@ services:
       - REDIS_HOST=redis
       - REDIS_CACHE_HOST=redis-cache
       - SECRET_KEY=0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ
+      - API_TOKEN_PEPPERS=1:SuperSecretPepperKeyForNetGraphX
+    volumes:
+      - ./netbox_extra.py:/etc/netbox/config/extra.py
     networks:
       - netgraphx_net
 
@@ -113,6 +116,9 @@ services:
       - REDIS_HOST=redis
       - REDIS_CACHE_HOST=redis-cache
       - SECRET_KEY=0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ
+      - API_TOKEN_PEPPERS=1:SuperSecretPepperKeyForNetGraphX
+    volumes:
+      - ./netbox_extra.py:/etc/netbox/config/extra.py
     networks:
       - netgraphx_net
 
