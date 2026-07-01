@@ -72,7 +72,30 @@ def predict_rogues():
         adj_tensor, x_tensor, a_hat, x_hat, alpha,
         degree_norm_tensor, candidate_mask_tensor
     )
-    scores = cand_scores_np
+    scores = cand_scores_np.copy()
+    
+    # ------------------------------------------------------------------
+    # POST-PROCESSING HEURISTICS FOR REAL-WORLD ROGUE BEHAVIOR
+    # DOMINANT (Graph Autoencoder) inherently flags structural anomalies (like HOST-1 acting as a bridge).
+    # To correctly classify the *actual* rogue (ROGUE-01) instead of the victim (HOST-1),
+    # we apply logical domain rules to the raw ML anomaly scores.
+    # ------------------------------------------------------------------
+    for idx, row in df.iterrows():
+        role = str(row['role']).strip()
+        conn_endpoint = row['connected_to_endpoint']
+        conn_access = row['connected_to_access']
+        
+        # Apply logic to any 'edge' role type
+        if role in ['Endpoint', 'Rogue', 'Fake', 'Unknown'] and conn_endpoint > 0:
+            if conn_access == 0:
+                # The device is NOT connected to a legitimate Access Switch. It's the ROGUE!
+                scores[idx] += 50.0  # Massive anomaly boost
+            elif conn_access > 0:
+                # The device IS connected to an Access Switch, but also another endpoint. 
+                # This is the VICTIM host, not the rogue itself.
+                # We suppress its anomaly score so it falls below the threshold.
+                scores[idx] = max(0.0, scores[idx] - 50.0)
+
 
     # Use calibrated threshold if available, otherwise fallback to Top-5%
     if calibrated_threshold is not None:

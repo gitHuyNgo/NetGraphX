@@ -1,0 +1,119 @@
+version: '3.8'
+
+services:
+  # -------------------------
+  # 1. NetGraphX AI & UI
+  # -------------------------
+  netgraphx-app:
+    build: .
+    container_name: netgraphx-app
+    ports:
+      - "8501:8501" # Streamlit UI
+      - "5001:5001" # Webhook
+    env_file: .env
+    environment:
+      - NEO4J_URI=bolt://neo4j:7687
+      - NETBOX_URL=http://netbox:8080
+    depends_on:
+      neo4j:
+        condition: service_healthy
+      netbox:
+        condition: service_started
+    networks:
+      - netgraphx_net
+
+  # -------------------------
+  # 2. Neo4j Graph Database
+  # -------------------------
+  neo4j:
+    image: neo4j:5
+    container_name: netgraphx-neo4j
+    ports:
+      - "7474:7474" # HTTP UI
+      - "7687:7687" # Bolt protocol
+    environment:
+      - NEO4J_AUTH=neo4j/NetGraphX123!
+      - NEO4J_PLUGINS=["apoc"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider localhost:7474 || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+    networks:
+      - netgraphx_net
+
+  # -------------------------
+  # 3. NetBox Dependencies
+  # -------------------------
+  postgres:
+    image: postgres:15-alpine
+    container_name: netgraphx-postgres
+    env_file: .env
+    environment:
+      - POSTGRES_DB=netbox
+      - POSTGRES_USER=netbox
+      - POSTGRES_PASSWORD=netbox
+    volumes:
+      # Automatically load the database dump when container starts
+      - ./netbox_dump.sql.gz:/docker-entrypoint-initdb.d/init.sql.gz
+    networks:
+      - netgraphx_net
+
+  redis:
+    image: valkey/valkey:9.0-alpine
+    container_name: netgraphx-redis
+    networks:
+      - netgraphx_net
+
+  redis-cache:
+    image: valkey/valkey:9.0-alpine
+    container_name: netgraphx-redis-cache
+    networks:
+      - netgraphx_net
+
+  # -------------------------
+  # 4. NetBox App
+  # -------------------------
+  netbox:
+    image: netboxcommunity/netbox:v4.6-5.0.1
+    container_name: netgraphx-netbox
+    ports:
+      - "8081:8080"
+    depends_on:
+      - postgres
+      - redis
+      - redis-cache
+    env_file: .env
+    environment:
+      - DB_HOST=postgres
+      - DB_NAME=netbox
+      - DB_USER=netbox
+      - DB_PASSWORD=netbox
+      - REDIS_HOST=redis
+      - REDIS_CACHE_HOST=redis-cache
+    networks:
+      - netgraphx_net
+
+  netbox-worker:
+    image: netboxcommunity/netbox:v4.6-5.0.1
+    container_name: netgraphx-netbox-worker
+    command:
+      - /opt/netbox/venv/bin/python
+      - /opt/netbox/netbox/manage.py
+      - rqworker
+    depends_on:
+      - netbox
+    env_file: .env
+    environment:
+      - DB_HOST=postgres
+      - DB_NAME=netbox
+      - DB_USER=netbox
+      - DB_PASSWORD=netbox
+      - REDIS_HOST=redis
+      - REDIS_CACHE_HOST=redis-cache
+    networks:
+      - netgraphx_net
+
+networks:
+  netgraphx_net:
+    driver: bridge

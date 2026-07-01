@@ -71,6 +71,10 @@ _ROLE_LAYER_MAP: Dict[str, int] = {
     "oob": 3,
     "out-of-band": 3,
     "management": 3,
+    # Level 4 — Rogue
+    "rogue": 4,
+    # Level 5 — Fake
+    "fake": 5,
 }
 
 _LAYER_LABELS = {
@@ -85,9 +89,11 @@ _NODE_COLORS = {
     1: "#e65100",   # Deep orange — Distribution
     2: "#1565c0",   # Deep blue — Access
     3: "#2e7d32",   # Deep green — Endpoints
+    4: "#b71c1c",   # Very dark red — Rogue
+    5: "#9c27b0",   # Purple — Fake
 }
 
-_NODE_SIZES = {0: 40, 1: 32, 2: 26, 3: 20}
+_NODE_SIZES = {0: 40, 1: 32, 2: 26, 3: 20, 4: 20, 5: 16}
 
 _SPOF_COLOR = "#f57f17"    # Amber — visible on white (yellow replaced)
 _SPOF_SIZE = 48
@@ -95,8 +101,15 @@ _MISMATCH_EDGE_COLOR = "#b71c1c"
 _DEFAULT_EDGE_COLOR = "#78909c"
 
 
-def _assign_layer(role: Optional[str]) -> int:
+def _assign_layer(role: Optional[str], name: Optional[str] = None) -> int:
     """Map a NetBox role string to a hierarchy level (0-3). Unknown → level 2."""
+    if name:
+        name_lower = name.lower()
+        if name_lower.startswith("rogue"):
+            return 4
+        if name_lower.startswith("fake"):
+            return 5
+            
     if not role:
         return 2
     return _ROLE_LAYER_MAP.get(role.lower().strip(), 2)
@@ -135,6 +148,8 @@ class NetworkGraphBuilder:
                 cable["source_device"],
                 cable["target_device"],
                 cable_id=cable["cable_id"],
+                source_device=cable["source_device"],
+                target_device=cable["target_device"],
                 source_interface=cable["source_interface"],
                 target_interface=cable["target_interface"],
                 status=cable.get("status"),
@@ -170,7 +185,7 @@ class NetworkGraphBuilder:
         vis_nodes = []
         for node, data in self.G.nodes(data=True):
             role  = data.get("role") or ""
-            layer = _assign_layer(role)
+            layer = _assign_layer(role, name=node)
 
             is_spof = node in spof_set
             color   = _NODE_COLORS.get(layer, "#1e88e5")
@@ -226,10 +241,12 @@ class NetworkGraphBuilder:
 
         vis_edges = []
         mismatched_cables = 0
-        for u, v, edata in self.G.edges(data=True):
+        for _, _, edata in self.G.edges(data=True):
+            u = edata["source_device"]
+            v = edata["target_device"]
             src_inf     = edata.get("source_interface", "?")
             tgt_inf     = edata.get("target_interface", "?")
-            is_mismatch = (u, v) in mismatch_pairs
+            is_mismatch = (u, v) in mismatch_pairs or (v, u) in mismatch_pairs
 
             color = _MISMATCH_EDGE_COLOR if is_mismatch else _DEFAULT_EDGE_COLOR
             width = 4 if is_mismatch else 1.5
@@ -244,6 +261,7 @@ class NetworkGraphBuilder:
                 mismatched_cables += 1
 
             vis_edges.append({
+                "id":     f"edge_{u}_{v}_{edata.get('cable_id', '')}",
                 "from":   u,
                 "to":     v,
                 "label":  label_text,
@@ -254,6 +272,8 @@ class NetworkGraphBuilder:
                 # Extra fields
                 "_src_if": src_inf,
                 "_tgt_if": tgt_inf,
+                "_src_vlan": edata.get("source_vlan_id"),
+                "_tgt_vlan": edata.get("target_vlan_id"),
                 "_cable_id": edata.get("cable_id"),
                 "_mismatch": is_mismatch,
             })

@@ -24,7 +24,7 @@ RBAC:
 
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -301,6 +301,7 @@ def _init_session():
             }
         ],
         "selected_device": None,
+        "selected_edge": None,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -475,6 +476,9 @@ def _render_sidebar(topo: Optional[Dict]) -> Dict:
         filters["show_dist"]   = st.checkbox("Show Distribution",      value=True, key="f_dist")
         filters["show_access"] = st.checkbox("Show Access / Edge",     value=True, key="f_access")
         filters["show_ep"]     = st.checkbox("Show Endpoints",         value=True, key="f_ep")
+
+        
+        st.markdown("<br>", unsafe_allow_html=True)
         filters["show_spof"]   = st.checkbox("Highlight SPOF Nodes",   value=True, key="f_spof")
         filters["show_vlan"]   = st.checkbox("Highlight VLAN Mismatches", value=True, key="f_vlan")
 
@@ -534,22 +538,58 @@ def _render_webhook_panel(role: str):
                 _trigger_done(force=True)
 
     if st.button("↻  Refresh Status", use_container_width=True, key="wh_refresh"):
+        import time
+        st.toast("Đang tải lại trạng thái Webhook...", icon="🔄")
+        time.sleep(0.5)
         st.rerun()
 
 
 def _trigger_done(force: bool = False):
+    import time
+    
+    old_sync_utc = None
+    try:
+        curr_status = requests.get(f"http://localhost:{webhook_config.WEBHOOK_PORT}/webhook/status", timeout=2).json()
+        old_sync_utc = curr_status.get("last_sync_utc")
+    except Exception:
+        pass
+
     url = f"http://localhost:{webhook_config.WEBHOOK_PORT}/webhook/done"
     if force:
         url += "?force=true"
     headers = {}
     if webhook_config.WEBHOOK_SECRET:
         headers["X-NetBox-Key"] = webhook_config.WEBHOOK_SECRET
+        
     try:
         resp = requests.post(url, headers=headers, timeout=5)
         data = resp.json()
         msg  = data.get("message", "Sync triggered.")
         if resp.status_code in (200, 202):
-            st.success(f"✅  {msg}")
+            if resp.status_code == 200 and data.get("status") == "no_pending_changes":
+                st.success(f"✅  {msg}")
+                return
+            
+            # Show a spinner and poll until completion
+            status_placeholder = st.empty()
+            with status_placeholder:
+                with st.spinner("🔄 Syncing with NetBox & Running AI Models... Please wait."):
+                    for _ in range(60): # 120 seconds max
+                        time.sleep(2)
+                        try:
+                            new_status = requests.get(f"http://localhost:{webhook_config.WEBHOOK_PORT}/webhook/status", timeout=2).json()
+                            if new_status.get("last_sync_utc") != old_sync_utc and not new_status.get("pending"):
+                                break
+                        except Exception:
+                            pass
+            
+            status_placeholder.empty()
+            st.success("✅  Sync completed successfully! Reloading graph...")
+            import time
+            time.sleep(1.5)
+            # Clear the cached topology so the new JSON is read!
+            load_topology_data.clear()
+            st.rerun()
         else:
             st.error(f"❌  {data.get('error', 'Unknown error.')}")
     except requests.ConnectionError:
@@ -614,12 +654,7 @@ def _render_ai_health_panel():
     # Parse timestamp
     trained_str = '—'
     if trained_at:
-        try:
-            from datetime import datetime, timezone
-            dt = datetime.fromisoformat(trained_at)
-            trained_str = dt.strftime('%Y-%m-%d %H:%M UTC')
-        except Exception:
-            trained_str = trained_at
+        trained_str = _fmt_utc(trained_at)
 
     # ── PR-AUC Gauge ────────────────────────────────────────────────────
     random_floor = contamination if contamination else 0.02
@@ -756,6 +791,10 @@ def _apply_filters(topo: Dict, filters: Dict) -> tuple:
     kept_ids = set()
     for n in topo["nodes"]:
         layer = n.get("_layer", 2)
+        # Dynamically move predicted rogues to layer 4 for visualization, regardless of NetBox role
+        if n.get("_is_predicted_rogue"):
+            layer = 4
+            
         if not _layer_ok(layer):
             continue
         if not _checkbox_ok(layer):
@@ -851,12 +890,21 @@ def _render_graph(topo: Optional[Dict], filters: Dict):
     clicked_node = vis_network(html=html, highlight=highlight, height=460, key="vis_net")
     
     if clicked_node is not None and clicked_node != "":
-        if st.session_state.get("selected_device") != clicked_node:
-            st.session_state["selected_device"] = clicked_node
-            st.rerun()
+        if clicked_node.startswith("EDGE::"):
+            edge_id = clicked_node.replace("EDGE::", "")
+            if st.session_state.get("selected_edge") != edge_id:
+                st.session_state["selected_edge"] = edge_id
+                st.session_state["selected_device"] = None
+                st.rerun()
+        else:
+            if st.session_state.get("selected_device") != clicked_node:
+                st.session_state["selected_device"] = clicked_node
+                st.session_state["selected_edge"] = None
+                st.rerun()
     elif clicked_node == "":
-        if st.session_state.get("selected_device") is not None:
+        if st.session_state.get("selected_device") is not None or st.session_state.get("selected_edge") is not None:
             st.session_state["selected_device"] = None
+            st.session_state["selected_edge"] = None
             st.rerun()
 
 
@@ -923,40 +971,93 @@ def _update_rogue_status(node_id: str, is_confirmed: bool):
     load_topology_data.clear()
     st.rerun()
 
-def _render_device_details(topo: Optional[Dict]):
+def _render_selection_details(topo: Optional[Dict]):
     hdr_col, vi_col = st.columns([0.75, 0.25])
+    
+    selected_device = st.session_state.get("selected_device")
+    selected_edge = st.session_state.get("selected_edge")
+    
     with hdr_col:
+        title = "📋 Device Details" if selected_device else "🔌 Connection Details" if selected_edge else "📋 Details"
         st.markdown(
-            "<div style='font-size:13px; font-weight:700; color:#1a2535; "
-            "margin-bottom:10px; margin-top:6px;'>📋 Device Details</div>",
+            f"<div style='font-size:13px; font-weight:700; color:#1a2535; "
+            f"margin-bottom:10px; margin-top:6px;'>{title}</div>",
             unsafe_allow_html=True,
         )
         
-    selected = st.session_state.get("selected_device")
-    
-    if selected:
+    if selected_device:
         with vi_col:
             if st.button("Q&A", use_container_width=True, type="primary", help="Hỏi chatbot về thiết bị này"):
-                st.session_state["trigger_chat"] = f"Cho tôi biết tất cả các thông tin về node {selected}"
+                st.session_state["trigger_chat"] = f"Cho tôi biết tất cả các thông tin về node {selected_device}"
 
-    if not selected or not topo:
+    if not selected_device and not selected_edge:
         st.markdown(
             "<div class='device-card' style='color:#8e99aa; font-size:12px; text-align:center; "
-            "padding:30px;'>Select a device from the sidebar<br>to inspect its details.</div>",
+            "padding:30px;'>Select a device or cable from the sidebar<br>to inspect its details.</div>",
+            unsafe_allow_html=True,
+        )
+        return
+        
+    if selected_edge:
+        edge_data = next(
+            (e for e in topo.get("edges", []) if e.get("id") == selected_edge), None
+        )
+        if not edge_data:
+            st.warning(f"Connection `{selected_edge}` not found.")
+            return
+            
+        mismatch_html = ""
+        if edge_data.get("_mismatch"):
+            mismatch_html = "<span class='spof-badge' style='background:rgba(255,23,68,0.1); border-color:#ff1744; color:#ff1744;'>❌ VLAN Mismatch</span>"
+        else:
+            mismatch_html = "<span class='ok-badge'>✓ Healthy</span>"
+            
+        fields = [
+            ("Source Device", edge_data.get("from")),
+            ("Source Interface", edge_data.get("_src_if")),
+            ("Source VLAN", edge_data.get("_src_vlan") or "—"),
+            ("Target Device", edge_data.get("to")),
+            ("Target Interface", edge_data.get("_tgt_if")),
+            ("Target VLAN", edge_data.get("_tgt_vlan") or "—"),
+            ("Cable ID", edge_data.get("_cable_id", "—")),
+        ]
+        
+        fields_html = "".join(
+            f"<div class='device-field'>"
+            f"<span class='lbl'>{lbl}</span>"
+            f"<span class='val'>{val}</span>"
+            f"</div>"
+            for lbl, val in fields
+        )
+        
+        st.markdown(
+            f"""
+            <div class='device-card'>
+              <div style='display:flex; align-items:center; gap:8px; margin-bottom:12px;
+                          border-bottom:1px solid rgba(0,0,0,0.05); padding-bottom:10px;'>
+                <b style='font-size:14px; color:#1a2535;'>Connection</b>
+                &nbsp;{mismatch_html}
+              </div>
+              {fields_html}
+            </div>
+            """,
             unsafe_allow_html=True,
         )
         return
 
     # Find node data
     node_data = next(
-        (n for n in topo.get("nodes", []) if n["id"] == selected), None
+        (n for n in topo.get("nodes", []) if n["id"] == selected_device), None
     )
     if not node_data:
-        st.warning(f"Device `{selected}` not found in topology data.")
+        st.warning(f"Device `{selected_device}` not found in topology data.")
         return
 
     is_spof = node_data.get("_is_spof", False)
     layer   = node_data.get("_layer", 2)
+    # Dynamically correct layer for rogue prediction
+    if node_data.get("_is_predicted_rogue"):
+        layer = 4
     layer_name  = _LAYER_LABELS.get(layer, "Unknown")
     layer_color = _NODE_COLORS.get(layer, "#1e88e5")
 
@@ -969,24 +1070,39 @@ def _render_device_details(topo: Optional[Dict]):
     # Find connected edges
     connected_edges = [
         e for e in topo.get("edges", [])
-        if e.get("from") == selected or e.get("to") == selected
+        if e.get("from") == selected_device or e.get("to") == selected_device
     ]
     connected_devices = []
     for e in connected_edges:
-        peer = e["to"] if e["from"] == selected else e["from"]
+        peer = e["to"] if e["from"] == selected_device else e["from"]
         connected_devices.append(peer)
 
     fields = [
         ("Name",          node_data["id"]),
-        ("Role",          node_data.get("_role") or "—"),
-        ("Layer",         f"L{layer} — {layer_name}"),
-        ("IP Address",    node_data.get("_ip") or "—"),
-        ("Status",        node_data.get("_status") or "—"),
+    ]
+    
+    if layer >= 4:
+        # Hide the L4/L5 numerical prefix for these special visual layers
+        fields.extend([
+            ("Role",          node_data.get("_role") or "—"),
+            ("Classification", layer_name),
+            ("IP Address",    node_data.get("_ip") or "—"),
+            ("Status",        node_data.get("_status") or "—")
+        ])
+    else:
+        fields.extend([
+            ("Role",          node_data.get("_role") or "—"),
+            ("Layer",         f"L{layer} — {layer_name}"),
+            ("IP Address",    node_data.get("_ip") or "—"),
+            ("Status",        node_data.get("_status") or "—")
+        ])
+
+    fields.extend([
         ("Vendor",        node_data.get("_vendor") or "—"),
         ("Site",          node_data.get("_site") or "—"),
         ("Rack",          node_data.get("_rack") or "—"),
         ("Connections",   str(len(connected_devices))),
-    ]
+    ])
     
     if node_data.get("_is_predicted_rogue"):
         fields.append(("AI Prediction", "🚨 ROGUE DEVICE"))
@@ -1033,13 +1149,13 @@ def _render_device_details(topo: Optional[Dict]):
             c1, c2 = st.columns(2)
             with c1:
                 if st.button("🚨 Confirm Rogue", key="btn_confirm_rogue", type="primary", use_container_width=True):
-                    _update_rogue_status(selected, True)
+                    _update_rogue_status(selected_device, True)
             with c2:
                 if st.button("✅ White-list / False Positive", key="btn_reject_rogue", use_container_width=True):
-                    _update_rogue_status(selected, False)
+                    _update_rogue_status(selected_device, False)
         else:
             if st.button("🚨 Flag as Rogue (Missed Anomaly)", key="btn_mark_rogue_fn", type="primary", use_container_width=True):
-                _update_rogue_status(selected, True)
+                _update_rogue_status(selected_device, True)
 
     # ── Active Learning Retrain Panel ─────────────────────────────────────
     has_feedback = any(n.get("_human_reviewed") for n in topo.get("nodes", []))
@@ -1339,7 +1455,7 @@ def _render_dashboard():
     col_device, col_chat = st.columns([2, 3])
 
     with col_device:
-        _render_device_details(topo)
+        _render_selection_details(topo)
 
     with col_chat:
         _render_rag_chat()
@@ -1353,7 +1469,10 @@ def _fmt_utc(utc_str: Optional[str]) -> str:
         return "—"
     try:
         dt = datetime.fromisoformat(utc_str)
-        return dt.strftime("%Y-%m-%d %H:%M UTC")
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        dt_local = dt + timedelta(hours=7)
+        return dt_local.strftime("%Y-%m-%d %H:%M (UTC+7)")
     except (ValueError, TypeError):
         return utc_str
 
