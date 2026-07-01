@@ -15,6 +15,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy source code and data
 COPY . .
+RUN mkdir -p data/storage
 
 # Set environment variables for production (can be overridden by compose)
 ENV PYTHONPATH=/app
