@@ -15,11 +15,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy source code and data
 COPY . .
+RUN mkdir -p data/storage
 
 # Set environment variables for production (can be overridden by compose)
 ENV PYTHONPATH=/app
 ENV HOST=0.0.0.0
 ENV PORT=8501
 
-# Start the Streamlit app
-CMD ["streamlit", "run", "src/ui/app.py", "--server.port", "8501", "--server.address", "0.0.0.0"]
+# Start both the webhook server and Streamlit app
+CMD bash -c "python -m src.api.webhook.server & streamlit run src/ui/app.py --server.port 8501 --server.address 0.0.0.0"
