@@ -10,6 +10,8 @@ services:
     ports:
       - "8501:8501" # Streamlit UI
       - "5001:5001" # Webhook
+    volumes:
+      - ./data/storage:/app/data/storage
     env_file: .env
     environment:
       - NEO4J_URI=bolt://neo4j:7687

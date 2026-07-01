@@ -224,6 +224,10 @@ class HybridRetriever:
         for row in rows:
             # Format each result row into readable text
             parts.append("---")
+            name = row.get("name")
+            if name:
+                parts.append(f"Thiết bị: {name}")
+                
             desc = row.get("description") or row.get("mismatch_detail") or ""
             if desc:
                 parts.append(desc)
