@@ -3,7 +3,7 @@ from pathlib import Path
 from dataclasses import dataclass
 from dotenv import load_dotenv
 
-load_dotenv(override=True)
+load_dotenv(override=False)
 
 def get_env(key: str, default=None, required: bool = False):
     value = os.getenv(key, default)
