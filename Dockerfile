@@ -15,7 +15,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy source code and data
 COPY . .
-RUN mkdir -p data/storage
+RUN mkdir -p data/storage data/mock data/ml
 
 # Set environment variables for production (can be overridden by compose)
 ENV PYTHONPATH=/app
