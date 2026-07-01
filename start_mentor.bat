@@ -23,7 +23,7 @@ echo Once ready, you can access the following services in your browser:
 echo.
 echo 1. NetGraphX AI Dashboard : http://localhost:8501
 echo 2. NetBox Administration  : http://localhost:8081 (admin/admin)
-echo 3. Neo4j Graph Browser    : http://localhost:7474 (neo4j/NetGraphX123!)
+echo 3. Neo4j Graph Browser    : http://localhost:7474 (neo4j/huyngo1234)
 echo.
 echo To stop everything later, run: docker-compose down
 echo ==================================================

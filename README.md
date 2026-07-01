@@ -9,7 +9,7 @@ This package contains the complete NetGraphX Network Intelligence Dashboard, alo
 ## How to Start the Environment (Windows)
 
 1. Extract this folder to a location on your computer.
-2. Open the `.env` file in a text editor and add your OpenAI API key to the `OPENAI_API_KEY` variable (required for the RAG Chatbot to function).
+2. Rename `.env.example` to `.env`. Open the `.env` file in a text editor and add your OpenAI API key to the `OPENAI_API_KEY` variable (required for the RAG Chatbot to function).
 3. Double-click the `start_mentor.bat` file.
    - This script will automatically trigger the docker-compose build process.
    - It will download all required images (NetBox, Neo4j, Redis, Postgres), install the Python dependencies, and ingest the included database dump (`netbox_dump.sql.gz`).
@@ -46,7 +46,7 @@ Once the containers are running, you can access the following services in your w
 - Purpose: The graph database containing the parsed topology nodes and edges.
 - Default Login:
   - Username: neo4j
-  - Password: NetGraphX123!
+  - Password: huyngo1234
 
 ## Stopping the Environment
 
