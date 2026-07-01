@@ -1,4 +1,3 @@
-import pynetbox
 import logging
 from typing import Any, Dict, List, Optional
 import requests
@@ -7,148 +6,226 @@ from config.settings import netbox_config
 
 logger = logging.getLogger(__name__)
 
-
-def _vlan_record(vlan_obj: Any) -> Optional[Dict[str, Any]]:
-    if not vlan_obj:
-        return None
-    return {"vid": vlan_obj.vid, "name": vlan_obj.name}
-
-
 class NetBoxClient:
     def __init__(self):
-        self.nb = pynetbox.api(
-            netbox_config.NETBOX_URL,
-            token=netbox_config.NETBOX_API_TOKEN,
-        )
+        self.graphql_url = f"{netbox_config.NETBOX_URL.rstrip('/')}/graphql/"
+        self.headers = {
+            "Authorization": f"Token {netbox_config.NETBOX_API_TOKEN}",
+            "Content-Type": "application/json"
+        }
+
+    def _execute_graphql(self, query: str, list_name: str) -> List[Dict[str, Any]]:
+        """
+        Executes a GraphQL query with pagination for a specific list (e.g. device_list).
+        Returns all accumulated items.
+        """
+        limit = 1000
+        offset = 0
+        all_results = []
+        
+        while True:
+            # We inject the pagination arguments directly into the query string for simplicity
+            # assuming the caller formats the query with {limit} and {offset}
+            paginated_query = query.replace("{limit}", str(limit)).replace("{offset}", str(offset))
+            
+            try:
+                response = requests.post(
+                    self.graphql_url,
+                    headers=self.headers,
+                    json={"query": paginated_query},
+                    timeout=30
+                )
+                response.raise_for_status()
+                data = response.json()
+                
+                if "errors" in data:
+                    logger.error(f"[GraphQL Error] {data['errors']}")
+                    break
+                    
+                items = data.get("data", {}).get(list_name, [])
+                if not items:
+                    break
+                    
+                all_results.extend(items)
+                
+                if len(items) < limit:
+                    break # Reached the last page
+                    
+                offset += limit
+                
+            except requests.exceptions.RequestException as exc:
+                logger.error(f"[Error] GraphQL request failed: {exc}")
+                break
+                
+        return all_results
 
     def fetch_all_devices(self) -> List[Dict[str, Any]]:
-        try:
-            devices = self.nb.dcim.devices.all()
-            cleaned_devices = []
-
-            for device in devices:
-                role_obj = getattr(device, "role", None)
-                role_name = role_obj.name if role_obj else None
-
-                type_obj = getattr(device, "device_type", None)
-                manufacturer_obj = getattr(type_obj, "manufacturer", None) if type_obj else None
-                vendor_name = manufacturer_obj.name if manufacturer_obj else None
-                model_name = type_obj.model if type_obj else None
-
-                site_obj = getattr(device, "site", None)
-                site_name = site_obj.name if site_obj else None
-
-                rack_obj = getattr(device, "rack", None)
-                rack_name = rack_obj.name if rack_obj else None
-
-                ip_obj = getattr(device, "primary_ip", None)
-                primary_ip = ip_obj.address if ip_obj else None
-
-                cleaned_devices.append(
-                    {
-                        "id": device.id,
-                        "name": device.name,
-                        "model": model_name,
-                        "vendor": vendor_name,
-                        "role": role_name,
-                        "site": site_name,
-                        "rack": rack_name,
-                        "manufacturer": vendor_name,
-                        "primary_ip": primary_ip,
-                        "status": device.status.value if device.status else None,
-                    }
-                )
-            return cleaned_devices
-
-        except (pynetbox.core.query.RequestError, requests.exceptions.RequestException) as exc:
-            logger.error(f"[Error] Get error when getting device list:: {exc}")
-            return []
+        query = """
+        query {
+          device_list(pagination: {limit: {limit}, offset: {offset}}) {
+            id
+            name
+            status
+            primary_ip4 { address }
+            role { name }
+            site { name }
+            rack { name }
+            device_type { 
+              model 
+              manufacturer { name } 
+            }
+          }
+        }
+        """
+        raw_devices = self._execute_graphql(query, "device_list")
+        cleaned_devices = []
+        
+        for dev in raw_devices:
+            role_name = dev.get("role", {}).get("name") if dev.get("role") else None
+            site_name = dev.get("site", {}).get("name") if dev.get("site") else None
+            rack_name = dev.get("rack", {}).get("name") if dev.get("rack") else None
+            primary_ip = dev.get("primary_ip4", {}).get("address") if dev.get("primary_ip4") else None
+            
+            device_type = dev.get("device_type") or {}
+            model_name = device_type.get("model")
+            vendor_name = device_type.get("manufacturer", {}).get("name") if device_type.get("manufacturer") else None
+            
+            cleaned_devices.append({
+                "id": dev["id"],
+                "name": dev["name"],
+                "model": model_name,
+                "vendor": vendor_name,
+                "role": role_name,
+                "site": site_name,
+                "rack": rack_name,
+                "manufacturer": vendor_name,
+                "primary_ip": primary_ip,
+                "status": dev["status"]
+            })
+            
+        return cleaned_devices
 
     def fetch_all_cables(self) -> List[Dict[str, Any]]:
-        try:
-            cables = self.nb.dcim.cables.all()
-            cleaned_cables = []
-
-            for cable in cables:
-                try:
-                    a_term = next(iter(cable.a_terminations))
-                    b_term = next(iter(cable.b_terminations))
-
-                    a_device = a_term.object.device.name
-                    a_interface = a_term.object.name
-                    a_interface_id = a_term.object.id
-
-                    b_device = b_term.object.device.name
-                    b_interface = b_term.object.name
-                    b_interface_id = b_term.object.id
-
-                    cleaned_cables.append(
-                        {
-                            "cable_id": cable.id,
-                            "source_device": a_device,
-                            "source_interface": a_interface,
-                            "source_interface_id": a_interface_id,
-                            "target_device": b_device,
-                            "target_interface": b_interface,
-                            "target_interface_id": b_interface_id,
-                            "status": cable.status.value if cable.status else None,
-                        }
-                    )
-
-                except StopIteration:
-                    continue
-                except AttributeError:
-                    continue
-
-            return cleaned_cables
-
-        except (pynetbox.core.query.RequestError, requests.exceptions.RequestException) as exc:
-            logger.error(f"[Error] Get error when getting cable list: {exc}")
-            return []
+        query = """
+        query {
+          cable_list(pagination: {limit: {limit}, offset: {offset}}) {
+            id
+            status
+            a_terminations { 
+              ... on InterfaceType { id name device { name } } 
+            }
+            b_terminations { 
+              ... on InterfaceType { id name device { name } } 
+            }
+          }
+        }
+        """
+        raw_cables = self._execute_graphql(query, "cable_list")
+        cleaned_cables = []
+        
+        for cable in raw_cables:
+            a_terms = cable.get("a_terminations") or []
+            b_terms = cable.get("b_terminations") or []
+            
+            if not a_terms or not b_terms:
+                continue
+                
+            a_term = a_terms[0]
+            b_term = b_terms[0]
+            
+            # Skip if termination is not an Interface (e.g. empty dict or missing device)
+            if not a_term or "device" not in a_term or not b_term or "device" not in b_term:
+                continue
+                
+            a_device = a_term["device"]["name"] if a_term["device"] else None
+            a_interface = a_term["name"]
+            a_interface_id = a_term["id"]
+            
+            b_device = b_term["device"]["name"] if b_term["device"] else None
+            b_interface = b_term["name"]
+            b_interface_id = b_term["id"]
+            
+            if not a_device or not b_device:
+                continue
+            
+            cleaned_cables.append({
+                "cable_id": cable["id"],
+                "source_device": a_device,
+                "source_interface": a_interface,
+                "source_interface_id": a_interface_id,
+                "target_device": b_device,
+                "target_interface": b_interface,
+                "target_interface_id": b_interface_id,
+                "status": cable["status"]
+            })
+            
+        return cleaned_cables
 
     def fetch_all_interfaces_vlan(self) -> List[Dict[str, Any]]:
-        try:
-            interfaces = self.nb.dcim.interfaces.all()
-            cleaned_interfaces = []
-
-            for interface in interfaces:
-                mode_value = interface.mode.value if interface.mode else None
-                untagged_vlan = _vlan_record(getattr(interface, "untagged_vlan", None))
-                tagged_vlans = [
-                    record
-                    for vlan in getattr(interface, "tagged_vlans", []) or []
-                    if (record := _vlan_record(vlan))
-                ]
-
-                vlan_id = None
-                if untagged_vlan:
-                    vlan_id = untagged_vlan["vid"]
-                elif tagged_vlans:
-                    vlan_id = tagged_vlans[0]["vid"]
-
-                cleaned_interfaces.append(
-                    {
-                        "id": interface.id,
-                        "name": interface.name,
-                        "mac_address": interface.mac_address or None,
-                        "mode": mode_value,
-                        "device_id": interface.device.id if interface.device else None,
-                        "device_name": interface.device.name if interface.device else None,
-                        "interface_name": interface.name,
-                        "untagged_vlan": untagged_vlan,
-                        "tagged_vlans": tagged_vlans,
-                        "vlan_id": vlan_id,
-                    }
-                )
-            return cleaned_interfaces
-
-        except (pynetbox.core.query.RequestError, requests.exceptions.RequestException) as exc:
-            logger.error(f"[Error] Get error when getting interface list: {exc}")
-            return []
+        query = """
+        query {
+          interface_list(pagination: {limit: {limit}, offset: {offset}}) {
+            id
+            name
+            mac_addresses { mac_address }
+            mode
+            device { id name }
+            untagged_vlan { vid name }
+            tagged_vlans { vid name }
+          }
+        }
+        """
+        raw_interfaces = self._execute_graphql(query, "interface_list")
+        cleaned_interfaces = []
+        
+        def _vlan_record(vlan_dict):
+            if not vlan_dict:
+                return None
+            return {"vid": vlan_dict.get("vid"), "name": vlan_dict.get("name")}
+        
+        for interface in raw_interfaces:
+            mode_value = interface.get("mode")
+            untagged_vlan = _vlan_record(interface.get("untagged_vlan"))
+            
+            tagged_vlans = []
+            if interface.get("tagged_vlans"):
+                for vlan in interface["tagged_vlans"]:
+                    record = _vlan_record(vlan)
+                    if record:
+                        tagged_vlans.append(record)
+            
+            vlan_id = None
+            if untagged_vlan:
+                vlan_id = untagged_vlan["vid"]
+            elif tagged_vlans:
+                vlan_id = tagged_vlans[0]["vid"]
+                
+            device = interface.get("device") or {}
+            
+            macs = interface.get("mac_addresses") or []
+            mac_addr = macs[0].get("mac_address") if macs else None
+            
+            cleaned_interfaces.append({
+                "id": interface["id"],
+                "name": interface["name"],
+                "mac_address": mac_addr,
+                "mode": mode_value,
+                "device_id": device.get("id"),
+                "device_name": device.get("name"),
+                "interface_name": interface["name"],
+                "untagged_vlan": untagged_vlan,
+                "tagged_vlans": tagged_vlans,
+                "vlan_id": vlan_id
+            })
+            
+        return cleaned_interfaces
 
 
 if __name__ == "__main__":
     client = NetBoxClient()
+
+    logger.setLevel(logging.INFO)
+    logging.basicConfig(level=logging.INFO)
 
     logger.info("\n[1] Extracting Devices list...")
     devices_data = client.fetch_all_devices()
@@ -162,8 +239,8 @@ if __name__ == "__main__":
     if cables_data:
         logger.info(f"First cable sample: {cables_data[0]}")
 
-    print("\n[3] Extracting Interface/VLAN list...")
+    logger.info("\n[3] Extracting Interface/VLAN list...")
     interfaces_data = client.fetch_all_interfaces_vlan()
-    print(f"Found {len(interfaces_data)} interfaces.")
+    logger.info(f"Found {len(interfaces_data)} interfaces.")
     if interfaces_data:
-        print("First interface sample:", interfaces_data[0])
+        logger.info(f"First interface sample: {interfaces_data[0]}")

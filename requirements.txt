@@ -8,6 +8,11 @@ python-dotenv
 streamlit
 flask
 pyyaml
+torch
 torchvision
 scikit-learn
 pandas
+numpy
+scipy
+joblib
+requests

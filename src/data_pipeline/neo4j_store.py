@@ -86,7 +86,7 @@ class Neo4jTopologyStore:
 
         # Build a quick lookup: device_id -> device dict for interface descriptions
         device_by_id: Dict[int, Dict[str, Any]] = {}
-
+        device_params = []
         for device in topology.devices:
             # Build initial description (no audit flags yet — they come later)
             description = build_device_description(
@@ -99,51 +99,65 @@ class Neo4jTopologyStore:
                 primary_ip=device.get("primary_ip"),
                 status=device.get("status"),
             )
+            device_by_id[device.get("id")] = device
+            device_params.append({
+                "id": device.get("id"),
+                "name": device.get("name"),
+                "model": device.get("model"),
+                "vendor": device.get("vendor"),
+                "role": device.get("role"),
+                "site": device.get("site"),
+                "rack": device.get("rack"),
+                "primary_ip": device.get("primary_ip"),
+                "status": device.get("status"),
+                "description": description,
+            })
+            
+        if device_params:
             tx.run(
                 """
-                MERGE (d:Device {id: $id})
-                SET d.name = $name,
-                    d.model = $model,
-                    d.vendor = $vendor,
-                    d.role = $role,
-                    d.site = $site,
-                    d.rack = $rack,
-                    d.primary_ip = $primary_ip,
-                    d.status = $status,
+                UNWIND $devices AS dev
+                MERGE (d:Device {id: dev.id})
+                SET d.name = dev.name,
+                    d.model = dev.model,
+                    d.vendor = dev.vendor,
+                    d.role = dev.role,
+                    d.site = dev.site,
+                    d.rack = dev.rack,
+                    d.primary_ip = dev.primary_ip,
+                    d.status = dev.status,
                     d.is_SPOF = false,
                     d.is_loop = false,
                     d.has_topology_violation = false,
                     d.topology_violation_reason = null,
-                    d.description = $description
+                    d.description = dev.description
                 """,
-                id=device.get("id"),
-                name=device.get("name"),
-                model=device.get("model"),
-                vendor=device.get("vendor"),
-                role=device.get("role"),
-                site=device.get("site"),
-                rack=device.get("rack"),
-                primary_ip=device.get("primary_ip"),
-                status=device.get("status"),
-                description=description,
+                devices=device_params,
             )
-            device_by_id[device.get("id")] = device
 
         vlan_records = Neo4jTopologyStore._collect_vlan_records(topology.interfaces)
+        vlan_params = []
         for vlan in vlan_records:
             vid = vlan.get("vid")
             vname = vlan.get("name") or f"VLAN-{vid}"
+            vlan_params.append({
+                "vid": vid,
+                "name": vname,
+                "description": f"VLAN {vid} ({vname}): phân đoạn mạng logic dùng để cô lập lưu lượng."
+            })
+            
+        if vlan_params:
             tx.run(
                 """
-                MERGE (v:VLAN {vid: $vid})
-                SET v.name = $name,
-                    v.description = $description
+                UNWIND $vlans AS vlan
+                MERGE (v:VLAN {vid: vlan.vid})
+                SET v.name = vlan.name,
+                    v.description = vlan.description
                 """,
-                vid=vid,
-                name=vname,
-                description=f"VLAN {vid} ({vname}): phân đoạn mạng logic dùng để cô lập lưu lượng.",
+                vlans=vlan_params,
             )
 
+        interface_params = []
         for interface in topology.interfaces:
             dev_id = interface.get("device_id")
             dev = device_by_id.get(dev_id, {})
@@ -156,44 +170,57 @@ class Neo4jTopologyStore:
                 untagged_vlan=interface.get("untagged_vlan"),
                 tagged_vlans=interface.get("tagged_vlans"),
             )
+            interface_params.append({
+                "id": interface.get("id"),
+                "name": interface.get("name"),
+                "mac_address": interface.get("mac_address"),
+                "mode": interface.get("mode"),
+                "device_id": dev_id,
+                "description": iface_description
+            })
+
+        if interface_params:
             tx.run(
                 """
-                MATCH (d:Device {id: $device_id})
-                MERGE (i:Interface {id: $id})
-                SET i.name = $name,
-                    i.mac_address = $mac_address,
-                    i.mode = $mode,
+                UNWIND $interfaces AS iface
+                MATCH (d:Device {id: iface.device_id})
+                MERGE (i:Interface {id: iface.id})
+                SET i.name = iface.name,
+                    i.mac_address = iface.mac_address,
+                    i.mode = iface.mode,
                     i.is_loop = false,
                     i.has_vlan_mismatch = false,
-                    i.description = $description
+                    i.description = iface.description
                 MERGE (i)-[:BELONGS_TO]->(d)
                 """,
-                id=interface.get("id"),
-                name=interface.get("name"),
-                mac_address=interface.get("mac_address"),
-                mode=interface.get("mode"),
-                device_id=dev_id,
-                description=iface_description,
+                interfaces=interface_params,
             )
 
-            Neo4jTopologyStore._write_vlan_memberships(tx, interface)
+        Neo4jTopologyStore._write_vlan_memberships(tx, topology.interfaces)
 
+        cable_params = []
         for cable in topology.cables:
+            cable_params.append({
+                "source_interface_id": cable.get("source_interface_id"),
+                "target_interface_id": cable.get("target_interface_id"),
+                "cable_id": cable.get("cable_id"),
+                "status": cable.get("status"),
+            })
+            
+        if cable_params:
             tx.run(
                 """
-                MATCH (source:Interface {id: $source_interface_id})
-                MATCH (target:Interface {id: $target_interface_id})
-                MERGE (source)-[link:CONNECTED_TO {cable_id: $cable_id}]->(target)
-                SET link.status = $status,
+                UNWIND $cables AS cable
+                MATCH (source:Interface {id: cable.source_interface_id})
+                MATCH (target:Interface {id: cable.target_interface_id})
+                MERGE (source)-[link:CONNECTED_TO {cable_id: cable.cable_id}]->(target)
+                SET link.status = cable.status,
                     link.is_loop = false,
                     link.loop_id = null,
                     link.has_vlan_mismatch = false,
                     link.vlan_mismatch_detail = null
                 """,
-                source_interface_id=cable.get("source_interface_id"),
-                target_interface_id=cable.get("target_interface_id"),
-                cable_id=cable.get("cable_id"),
-                status=cable.get("status"),
+                cables=cable_params,
             )
 
     @staticmethod
@@ -211,38 +238,53 @@ class Neo4jTopologyStore:
         return list(vlan_index.values())
 
     @staticmethod
-    def _write_vlan_memberships(tx, interface: Dict[str, Any]) -> None:
-        interface_id = interface.get("id")
-        mode = interface.get("mode")
+    def _write_vlan_memberships(tx, interfaces: List[Dict[str, Any]]) -> None:
+        untagged_params = []
+        tagged_params = []
+        
+        for interface in interfaces:
+            interface_id = interface.get("id")
+            mode = interface.get("mode")
+            is_trunk = mode in TRUNK_MODES
+            
+            untagged_vlan = interface.get("untagged_vlan")
+            if untagged_vlan and untagged_vlan.get("vid") is not None:
+                untagged_params.append({
+                    "interface_id": interface_id,
+                    "vid": untagged_vlan["vid"],
+                    "tagged": is_trunk
+                })
 
-        untagged_vlan = interface.get("untagged_vlan")
-        is_trunk = mode in TRUNK_MODES
-        if untagged_vlan and untagged_vlan.get("vid") is not None:
+            for tagged_vlan in interface.get("tagged_vlans") or []:
+                if tagged_vlan.get("vid") is not None:
+                    tagged_params.append({
+                        "interface_id": interface_id,
+                        "vid": tagged_vlan["vid"],
+                        "tagged": is_trunk
+                    })
+
+        if untagged_params:
             tx.run(
                 """
-                MATCH (i:Interface {id: $interface_id})
-                MATCH (v:VLAN {vid: $vid})
+                UNWIND $params AS param
+                MATCH (i:Interface {id: param.interface_id})
+                MATCH (v:VLAN {vid: param.vid})
                 MERGE (i)-[membership:MEMBER_OF]->(v)
-                SET membership.tagged = $tagged
+                SET membership.tagged = param.tagged
                 """,
-                interface_id=interface_id,
-                vid=untagged_vlan["vid"],
-                tagged=is_trunk,
+                params=untagged_params,
             )
 
-        for tagged_vlan in interface.get("tagged_vlans") or []:
-            if tagged_vlan.get("vid") is None:
-                continue
+        if tagged_params:
             tx.run(
                 """
-                MATCH (i:Interface {id: $interface_id})
-                MATCH (v:VLAN {vid: $vid})
+                UNWIND $params AS param
+                MATCH (i:Interface {id: param.interface_id})
+                MATCH (v:VLAN {vid: param.vid})
                 MERGE (i)-[membership:MEMBER_OF]->(v)
-                SET membership.tagged = $tagged
+                SET membership.tagged = param.tagged
                 """,
-                interface_id=interface_id,
-                vid=tagged_vlan["vid"],
-                tagged=is_trunk,
+                params=tagged_params,
             )
 
 
@@ -260,10 +302,9 @@ class Neo4jTopologyStore:
             )
 
     @staticmethod
-    def _apply_loop_flags(tx, graph, config_path: str, loop_result: AuditResult, loop_status: str) -> dict:
+    def _apply_loop_flags(tx, graph, config_path: str, loop_result: AuditResult, loop_status: str) -> list:
         loop_devices = devices_with_compliance_status(loop_result, loop_status)
-        loop_context = collect_loop_edges(graph, config_path)
-        loop_id = loop_context["loop_id"]
+        loop_contexts = collect_loop_edges(graph, config_path)
 
         if loop_devices:
             tx.run(
@@ -275,35 +316,52 @@ class Neo4jTopologyStore:
                 device_names=loop_devices,
             )
 
-        loop_interfaces = loop_participating_interfaces(loop_context["edges"])
-        for interface_ref in loop_interfaces:
+        loop_iface_params = []
+        loop_link_params = []
+        for loop_context in loop_contexts:
+            loop_id = loop_context["loop_id"]
+            loop_interfaces = loop_participating_interfaces(loop_context["edges"])
+            
+            for interface_ref in loop_interfaces:
+                loop_iface_params.append({
+                    "interface_name": interface_ref["interface_name"],
+                    "device_name": interface_ref["device_name"],
+                })
+
+            if loop_id:
+                for edge in loop_context["edges"]:
+                    loop_link_params.append({
+                        "source_device": edge["source_device"],
+                        "target_device": edge["target_device"],
+                        "source_interface": edge["source_interface"],
+                        "target_interface": edge["target_interface"],
+                        "cable_id": edge["cable_id"],
+                        "loop_id": loop_id,
+                    })
+                    
+        if loop_iface_params:
             tx.run(
                 """
-                MATCH (i:Interface {name: $interface_name})-[:BELONGS_TO]->(d:Device {name: $device_name})
+                UNWIND $interfaces AS iface
+                MATCH (i:Interface {name: iface.interface_name})-[:BELONGS_TO]->(d:Device {name: iface.device_name})
                 SET i.is_loop = true
                 """,
-                interface_name=interface_ref["interface_name"],
-                device_name=interface_ref["device_name"],
+                interfaces=loop_iface_params,
             )
-
-        if loop_id:
-            for edge in loop_context["edges"]:
-                tx.run(
-                    """
-                    MATCH (source:Interface {name: $source_interface})-[:BELONGS_TO]->(:Device {name: $source_device})
-                    MATCH (target:Interface {name: $target_interface})-[:BELONGS_TO]->(:Device {name: $target_device})
-                    MATCH (source)-[link:CONNECTED_TO {cable_id: $cable_id}]-(target)
-                    SET link.is_loop = true,
-                        link.loop_id = $loop_id
-                    """,
-                    source_device=edge["source_device"],
-                    target_device=edge["target_device"],
-                    source_interface=edge["source_interface"],
-                    target_interface=edge["target_interface"],
-                    cable_id=edge["cable_id"],
-                    loop_id=loop_id,
-                )
-        return loop_context
+            
+        if loop_link_params:
+            tx.run(
+                """
+                UNWIND $links AS link_param
+                MATCH (source:Interface {name: link_param.source_interface})-[:BELONGS_TO]->(:Device {name: link_param.source_device})
+                MATCH (target:Interface {name: link_param.target_interface})-[:BELONGS_TO]->(:Device {name: link_param.target_device})
+                MATCH (source)-[link:CONNECTED_TO {cable_id: link_param.cable_id}]-(target)
+                SET link.is_loop = true,
+                    link.loop_id = link_param.loop_id
+                """,
+                links=loop_link_params,
+            )
+        return loop_contexts
 
     @staticmethod
     def _apply_topology_violation_flags(tx, star_result: AuditResult) -> None:
@@ -325,38 +383,48 @@ class Neo4jTopologyStore:
     @staticmethod
     def _apply_vlan_mismatch_flags(tx, graph, interfaces_list: list, link_template: str) -> set:
         mismatch_interface_names = set()
+        mismatch_link_params = []
         for mismatch in collect_vlan_mismatch_edges(graph, interfaces_list):
             detail = link_template.format(**mismatch)
-            tx.run(
-                """
-                MATCH (source:Interface {name: $source_interface})-[:BELONGS_TO]->(:Device {name: $source_device})
-                MATCH (target:Interface {name: $target_interface})-[:BELONGS_TO]->(:Device {name: $target_device})
-                MATCH (source)-[link:CONNECTED_TO {cable_id: $cable_id}]-(target)
-                SET link.has_vlan_mismatch = true,
-                    link.vlan_mismatch_detail = $detail
-                """,
-                source_device=mismatch["source_device"],
-                target_device=mismatch["target_device"],
-                source_interface=mismatch["source_interface"],
-                target_interface=mismatch["target_interface"],
-                cable_id=mismatch["cable_id"],
-                detail=detail,
-            )
+            mismatch_link_params.append({
+                "source_device": mismatch["source_device"],
+                "target_device": mismatch["target_device"],
+                "source_interface": mismatch["source_interface"],
+                "target_interface": mismatch["target_interface"],
+                "cable_id": mismatch["cable_id"],
+                "detail": detail,
+            })
             mismatch_interface_names.add(
                 (mismatch["source_interface"], mismatch["source_device"])
             )
             mismatch_interface_names.add(
                 (mismatch["target_interface"], mismatch["target_device"])
             )
-
-        for iface_name, dev_name in mismatch_interface_names:
+            
+        if mismatch_link_params:
             tx.run(
                 """
-                MATCH (i:Interface {name: $iface_name})-[:BELONGS_TO]->(d:Device {name: $dev_name})
+                UNWIND $links AS link_param
+                MATCH (source:Interface {name: link_param.source_interface})-[:BELONGS_TO]->(:Device {name: link_param.source_device})
+                MATCH (target:Interface {name: link_param.target_interface})-[:BELONGS_TO]->(:Device {name: link_param.target_device})
+                MATCH (source)-[link:CONNECTED_TO {cable_id: link_param.cable_id}]-(target)
+                SET link.has_vlan_mismatch = true,
+                    link.vlan_mismatch_detail = link_param.detail
+                """,
+                links=mismatch_link_params,
+            )
+
+        if mismatch_interface_names:
+            mismatch_iface_params = [
+                {"iface_name": i, "dev_name": d} for i, d in mismatch_interface_names
+            ]
+            tx.run(
+                """
+                UNWIND $interfaces AS iface
+                MATCH (i:Interface {name: iface.iface_name})-[:BELONGS_TO]->(d:Device {name: iface.dev_name})
                 SET i.has_vlan_mismatch = true
                 """,
-                iface_name=iface_name,
-                dev_name=dev_name,
+                interfaces=mismatch_iface_params,
             )
         return mismatch_interface_names
 
@@ -372,6 +440,7 @@ class Neo4jTopologyStore:
             """
         ).data()
 
+        dev_params = []
         for d in devices_data:
             desc = build_device_description(
                 name=d["name"],
@@ -387,9 +456,20 @@ class Neo4jTopologyStore:
                 has_topology_violation=bool(d.get("has_violation")),
                 topology_violation_reason=d.get("reason")
             )
-            tx.run("MATCH (d:Device {name: $name}) SET d.description = $desc", name=d["name"], desc=desc)
+            dev_params.append({"name": d["name"], "desc": desc})
+            
+        if dev_params:
+            tx.run(
+                """
+                UNWIND $devices AS dev
+                MATCH (d:Device {name: dev.name}) 
+                SET d.description = dev.desc
+                """,
+                devices=dev_params,
+            )
 
         loop_ifaces_set = {(ref["interface_name"], ref["device_name"]) for ref in loop_interfaces}
+        iface_params = []
         for interface in interfaces_list:
             iface_name = interface.get("name", "")
             dev_name = interface.get("device_name", "không rõ")
@@ -407,14 +487,20 @@ class Neo4jTopologyStore:
                 is_loop=is_loop_iface,
                 has_vlan_mismatch=has_mismatch_iface,
             )
+            iface_params.append({
+                "iface_name": iface_name,
+                "dev_name": dev_name,
+                "desc": desc,
+            })
+            
+        if iface_params:
             tx.run(
                 """
-                MATCH (i:Interface {name: $iface_name})-[:BELONGS_TO]->(d:Device {name: $dev_name})
-                SET i.description = $desc
+                UNWIND $interfaces AS iface
+                MATCH (i:Interface {name: iface.iface_name})-[:BELONGS_TO]->(d:Device {name: iface.dev_name})
+                SET i.description = iface.desc
                 """,
-                iface_name=iface_name,
-                dev_name=dev_name,
-                desc=desc
+                interfaces=iface_params,
             )
 
     @staticmethod
@@ -455,9 +541,11 @@ class Neo4jTopologyStore:
         )
 
         Neo4jTopologyStore._apply_spof_flags(tx, spof_result, spof_status)
-        loop_context = Neo4jTopologyStore._apply_loop_flags(tx, graph, config_path, loop_result, loop_status)
+        loop_contexts = Neo4jTopologyStore._apply_loop_flags(tx, graph, config_path, loop_result, loop_status)
         Neo4jTopologyStore._apply_topology_violation_flags(tx, star_result)
         mismatch_interface_names = Neo4jTopologyStore._apply_vlan_mismatch_flags(tx, graph, interfaces_list, link_template)
 
-        loop_interfaces = loop_participating_interfaces(loop_context["edges"])
-        Neo4jTopologyStore._rebuild_descriptions_with_python(tx, interfaces_list, loop_interfaces, mismatch_interface_names)
+        all_loop_interfaces = []
+        for lc in loop_contexts:
+            all_loop_interfaces.extend(loop_participating_interfaces(lc["edges"]))
+        Neo4jTopologyStore._rebuild_descriptions_with_python(tx, interfaces_list, all_loop_interfaces, mismatch_interface_names)

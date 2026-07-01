@@ -73,10 +73,10 @@ def _run_sync_pipeline() -> None:
     app.logger.info("[Webhook] Triggering topology sync pipeline...")
     try:
         result = subprocess.run(
-            [sys.executable, "-m", "src.main"],
+            [sys.executable, "main.py", "--run-engine"],
             capture_output=True,
             text=True,
-            timeout=300,  # 5-minute hard limit
+            timeout=900,  # 15-minute hard limit
         )
         if result.returncode == 0:
             app.logger.info("[Webhook] Sync pipeline completed successfully.")

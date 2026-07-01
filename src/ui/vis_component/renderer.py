@@ -309,6 +309,7 @@ function initGraph() {{
   // Layer overlay
   const overlay = document.getElementById('layer-overlay');
   Object.entries(LAYER_NAMES).forEach(([lvl, name]) => {{
+    if (parseInt(lvl) >= 4) return;
     const d = document.createElement('div');
     d.className = 'layer-badge';
     d.style.borderColor = LAYER_CLR[lvl] || '#484f58';
@@ -338,6 +339,8 @@ function initGraph() {{
     if (window.parent.sendNodeClick) {{
       if (params.nodes.length > 0) {{
         window.parent.sendNodeClick(params.nodes[0]);
+      }} else if (params.edges.length > 0) {{
+        window.parent.sendNodeClick("EDGE::" + params.edges[0]);
       }} else {{
         window.parent.sendNodeClick("");
       }}

@@ -6,7 +6,7 @@ from config.settings import netbox_config
 logger = logging.getLogger(__name__)
 
 class BaseTopologyGenerator:
-    def __init__(self, k: int = 2, num_sites: int = 5):
+    def __init__(self, k: int = 2, num_sites: int = 4):
         self.k = k
         self.num_sites = num_sites
         self.nb = pynetbox.api(

@@ -78,44 +78,42 @@ def _format_cycle_path(cycle_edges: List[Tuple[Any, ...]]) -> str:
 def collect_loop_edges(
     G: nx.Graph,
     config_path: Optional[str] = None,
-) -> Dict[str, Any]:
+) -> List[Dict[str, Any]]:
     audit_config = load_audit_config(config_path)
     rule_config = audit_config["network_loop"]
 
     try:
-        orientation = rule_config["metrics"]["cycle_orientation"]
-        cycle_edges = nx.find_cycle(G, orientation=orientation)
-        loop_id = _format_cycle_path(cycle_edges)
-        edges: List[Dict[str, Any]] = []
+        cycles = nx.cycle_basis(G)
+        all_loops = []
+        for cycle in cycles:
+            cycle_path = cycle + [cycle[0]]
+            cycle_edges = list(zip(cycle_path[:-1], cycle_path[1:]))
+            loop_id = _format_cycle_path(cycle_edges)
+            edges: List[Dict[str, Any]] = []
 
-        for edge in cycle_edges:
-            source_device = edge[0]
-            target_device = edge[1]
-            edge_data = G.edges[source_device, target_device]
-            edges.append(
-                {
-                    "source_device": source_device,
-                    "target_device": target_device,
-                    "source_interface": edge_data.get("source_interface"),
-                    "target_interface": edge_data.get("target_interface"),
-                    "cable_id": edge_data.get("cable_id"),
-                }
-            )
+            for edge in cycle_edges:
+                source_device = edge[0]
+                target_device = edge[1]
+                edge_data = G.edges[source_device, target_device]
+                edges.append(
+                    {
+                        "source_device": source_device,
+                        "target_device": target_device,
+                        "source_interface": edge_data.get("source_interface"),
+                        "target_interface": edge_data.get("target_interface"),
+                        "cable_id": edge_data.get("cable_id"),
+                    }
+                )
 
-        loop_devices = sorted(
-            {edge[0] for edge in cycle_edges} | {edge[1] for edge in cycle_edges}
-        )
-        return {
-            "loop_id": loop_id,
-            "edges": edges,
-            "devices": loop_devices,
-        }
+            loop_devices = sorted(cycle)
+            all_loops.append({
+                "loop_id": loop_id,
+                "edges": edges,
+                "devices": loop_devices,
+            })
+        return all_loops
     except nx.NetworkXNoCycle:
-        return {
-            "loop_id": None,
-            "edges": [],
-            "devices": [],
-        }
+        return []
 
 
 def loop_participating_interfaces(
@@ -170,12 +168,23 @@ def collect_vlan_mismatch_edges(
     }
     mismatches: List[Dict[str, Any]] = []
 
-    for source, target, edge_data in G.edges(data=True):
-        source_interface = edge_data.get("source_interface")
-        target_interface = edge_data.get("target_interface")
-        source_vlan = vlan_lookup.get((source, source_interface))
-        target_vlan = vlan_lookup.get((target, target_interface))
-
+    for _, _, edge_data in G.edges(data=True):
+        s_dev = edge_data.get("source_device")
+        t_dev = edge_data.get("target_device")
+        s_int = edge_data.get("source_interface")
+        t_int = edge_data.get("target_interface")
+        
+        # Guard against edges that might be missing these fields
+        if not s_dev or not t_dev or not s_int or not t_int:
+            continue
+        
+        source_vlan = vlan_lookup.get((s_dev, s_int))
+        target_vlan = vlan_lookup.get((t_dev, t_int))
+        
+        # Inject VLAN IDs into edge data so UI can access it
+        edge_data["source_vlan_id"] = source_vlan
+        edge_data["target_vlan_id"] = target_vlan
+        
         if (
             source_vlan is not None
             and target_vlan is not None
@@ -183,10 +192,10 @@ def collect_vlan_mismatch_edges(
         ):
             mismatches.append(
                 {
-                    "source_device": source,
-                    "target_device": target,
-                    "source_interface": source_interface,
-                    "target_interface": target_interface,
+                    "source_device": s_dev,
+                    "target_device": t_dev,
+                    "source_interface": s_int,
+                    "target_interface": t_int,
                     "source_vlan_id": source_vlan,
                     "target_vlan_id": target_vlan,
                     "cable_id": edge_data.get("cable_id"),
@@ -205,24 +214,37 @@ def detect_network_loops(
     node_compliance_data = _initialize_node_compliance(G, rule_config)
 
     try:
-        orientation = rule_config["metrics"]["cycle_orientation"]
-        cycle_edges = nx.find_cycle(G, orientation=orientation)
-        cycle_devices = sorted(
-            {edge[0] for edge in cycle_edges} | {edge[1] for edge in cycle_edges}
-        )
-        cycle_path = _format_cycle_path(cycle_edges)
+        cycles = nx.cycle_basis(G)
+        if not cycles:
+            return {
+                "is_passed": True,
+                "global_compliance_summary": rule_config["global_summary"]["pass"],
+                "node_compliance_data": node_compliance_data,
+            }
 
-        for device_name in cycle_devices:
-            node_compliance_data[device_name] = _non_compliant_node(
-                device_name,
-                rule_config,
-                cycle_path=cycle_path,
-                cycle_devices=", ".join(cycle_devices),
-            )
+        for i, cycle in enumerate(cycles, 1):
+            cycle_path = cycle + [cycle[0]]
+            cycle_edges = list(zip(cycle_path[:-1], cycle_path[1:]))
+            cycle_devices = sorted(cycle)
+            cycle_path_str = _format_cycle_path(cycle_edges)
+
+            for device_name in cycle:
+                knowledge = f"Thiết bị tham gia vào vòng lặp (Loop {i}: {cycle_path_str})."
+                if node_compliance_data[device_name]["compliance_status"] == rule_config["compliance_status"]["fail"]:
+                    node_compliance_data[device_name]["audit_knowledge"] += f" | {knowledge}"
+                else:
+                    node_compliance_data[device_name] = _non_compliant_node(
+                        device_name,
+                        rule_config,
+                        cycle_path=cycle_path_str,
+                        cycle_devices=", ".join(cycle_devices),
+                    )
+                    # Override the default template to provide accurate loop context for RAG
+                    node_compliance_data[device_name]["audit_knowledge"] = knowledge
 
         return {
             "is_passed": False,
-            "global_compliance_summary": rule_config["global_summary"]["fail"],
+            "global_compliance_summary": f"Phát hiện {len(cycles)} vòng lặp mạng (loop) trong hệ thống.",
             "node_compliance_data": node_compliance_data,
         }
     except nx.NetworkXNoCycle:
@@ -439,16 +461,18 @@ def verify_star_topology(
     try:
         cycles = nx.cycle_basis(G)
         if cycles:
-            for cycle in cycles:
+            for i, cycle in enumerate(cycles, 1):
+                cycle_path_str = " -> ".join(cycle) + f" -> {cycle[0]}"
+                knowledge = f"Nằm trong vòng lặp (Loop {i}: {cycle_path_str}), vi phạm cấu trúc hình sao."
                 for device_name in cycle:
                     if node_compliance_data[device_name]["compliance_status"] == rule_config["compliance_status"]["pass"]:
                         node_compliance_data[device_name] = _non_compliant_node(
                             device_name,
                             rule_config,
-                            reason="Thiết bị nằm trong một vòng lặp mạng (loop), vi phạm cấu trúc hình sao (star topology)."
+                            reason=knowledge
                         )
                     else:
-                        node_compliance_data[device_name]["audit_knowledge"] += " | Thiết bị nằm trong một vòng lặp mạng (loop), vi phạm cấu trúc hình sao (star topology)."
+                        node_compliance_data[device_name]["audit_knowledge"] += f" | {knowledge}"
     except Exception:
         pass
 
