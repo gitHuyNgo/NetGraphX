@@ -118,9 +118,13 @@ def run_engine(skip_embed: bool):
             logger.error(f"[Neo4j] Compliance sync failed: {exc}")
 
     if neo4j_store and not skip_embed:
-        logger.info("\n[Step 3c] Building vector embeddings for RAG pipeline (Task 2)...")
+        logger.info("\n[Step 3c] Launching vector embeddings for RAG pipeline in background (Task 2)...")
         logger.info("    Tip: Run with --skip-embed to skip this step for faster iterations.")
-        neo4j_store.build_vector_index()
+        subprocess.Popen(
+            [sys.executable, "-m", "src.rag.run_embedder"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
     elif skip_embed:
         logger.info("\n[Step 3c] Skipping vector embedding (--skip-embed flag set).")
 
@@ -149,6 +153,17 @@ def run_engine(skip_embed: bool):
         mismatch_list=mismatch_details,
         bottlenecks_list=spof_list,
     )
+
+    logger.info("\n[Step 5] Launching ML Anomaly Detection (DOMINANT) in background...")
+    try:
+        subprocess.Popen(
+            [sys.executable, "-m", "src.data_pipeline.run_ml"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+        logger.info("[ML] Background anomaly detection process started.")
+    except Exception as e:
+        logger.error(f"[ML] Failed to launch background anomaly detection: {e}")
 
     logger.info("\n==================================================")
     logger.info(" PROCESSING COMPLETED:")

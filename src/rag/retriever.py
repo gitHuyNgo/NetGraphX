@@ -75,13 +75,22 @@ ORDER BY d.name
 
 _CYPHER_ALL_ERRORS = """
 MATCH (d:Device)
-WHERE d.is_SPOF = true OR d.is_loop = true OR d.has_topology_violation = true
+WHERE d.is_SPOF = true OR d.is_loop = true OR d.has_topology_violation = true OR d.is_predicted_rogue = true
 RETURN d.name AS name,
        d.description AS description,
        d.is_SPOF AS is_spof,
        d.is_loop AS is_loop,
        d.has_topology_violation AS has_violation,
-       d.topology_violation_reason AS violation_reason
+       d.topology_violation_reason AS violation_reason,
+       d.is_predicted_rogue AS is_predicted_rogue,
+       d.anomaly_score AS anomaly_score
+ORDER BY d.name
+"""
+
+_CYPHER_ROGUE = """
+MATCH (d:Device {is_predicted_rogue: true})
+RETURN d.name AS name, d.description AS description,
+       d.role AS role, d.site AS site, d.anomaly_score AS anomaly_score
 ORDER BY d.name
 """
 
@@ -90,6 +99,7 @@ _CYPHER_TEMPLATES: Dict[str, str] = {
     "loop": _CYPHER_LOOP,
     "vlan_mismatch": _CYPHER_VLAN_MISMATCH,
     "topology_violation": _CYPHER_TOPOLOGY_VIOLATION,
+    "rogue": _CYPHER_ROGUE,
     "all": _CYPHER_ALL_ERRORS,
 }
 
@@ -113,6 +123,8 @@ RETURN
     d.is_loop       AS is_loop,
     d.has_topology_violation AS has_violation,
     d.topology_violation_reason AS violation_reason,
+    d.is_predicted_rogue AS is_predicted_rogue,
+    d.anomaly_score AS anomaly_score,
     collect(DISTINCT {
         interface: i.name,
         mode: i.mode,
@@ -203,6 +215,7 @@ class HybridRetriever:
                 "loop": "vòng lặp mạng",
                 "vlan_mismatch": "lỗi VLAN mismatch",
                 "topology_violation": "vi phạm cấu trúc topology",
+                "rogue": "thiết bị giả mạo (rogue)",
                 "all": "lỗi bất kỳ",
             }
             return f"✅ Không tìm thấy thiết bị nào có {label_map.get(target, target)}."
@@ -259,8 +272,12 @@ class HybridRetriever:
             f"🔍 Thông tin thiết bị: {row.get('device_name')}",
             "",
             row.get("device_description") or "(Không có mô tả)",
-            "",
         ]
+        
+        if row.get("is_predicted_rogue"):
+            lines.append(f"⚠️ CẢNH BÁO: ĐƯỢC DỰ ĐOÁN LÀ THIẾT BỊ GIẢ MẠO (ROGUE) VỚI ĐIỂM BẤT THƯỜNG (ANOMALY SCORE): {row.get('anomaly_score', 0):.4f}")
+        
+        lines.append("")
 
         interfaces = [i for i in (row.get("interfaces") or []) if i.get("interface")]
         if interfaces:
