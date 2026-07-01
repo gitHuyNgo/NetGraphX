@@ -32,7 +32,7 @@ services:
       - "7474:7474" # HTTP UI
       - "7687:7687" # Bolt protocol
     environment:
-      - NEO4J_AUTH=neo4j/NetGraphX123!
+      - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD}
       - NEO4J_PLUGINS=["apoc"]
     healthcheck:
       test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider localhost:7474 || exit 1"]
@@ -91,6 +91,7 @@ services:
       - DB_PASSWORD=netbox
       - REDIS_HOST=redis
       - REDIS_CACHE_HOST=redis-cache
+      - SECRET_KEY=0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ
     networks:
       - netgraphx_net
 
@@ -111,6 +112,7 @@ services:
       - DB_PASSWORD=netbox
       - REDIS_HOST=redis
       - REDIS_CACHE_HOST=redis-cache
+      - SECRET_KEY=0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ
     networks:
       - netgraphx_net
 
